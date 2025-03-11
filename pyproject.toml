@@ -13,7 +13,8 @@ numpy = "1.22.4"
 scikit-learn = "^1.6.1"
 tqdm = "^4.67.1"
 pygam = ">=0.8,<=0.9.1"
-torch="^2.5.1"
+optuna = "^4.2.1"
+properscoring = "^0.1"
 
 
 [tool.poetry.group.dev.dependencies]

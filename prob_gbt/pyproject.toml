@@ -4,7 +4,6 @@ version = "0.1.0"
 description = ""
 authors = ["Ilya Fastovets <ilya.fastovets@gmail.com>"]
 readme = "README.md"
-packages = [{include = "prob_gbt"}]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<=3.10.16"
@@ -26,4 +25,4 @@ run-example = "prob_gbt.example:main"
 
 [build-system]
 requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+build-backend = "poetry.core.masonry.api" 

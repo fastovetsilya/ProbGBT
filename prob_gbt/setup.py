@@ -1,0 +1,33 @@
+from setuptools import setup, find_packages
+
+setup(
+    name="prob-gbt",
+    version="0.1.0",
+    packages=find_packages(),
+    install_requires=[
+        "numpy==1.22.4",
+        "pandas>=2.2.0",
+        "catboost>=1.2.0",
+        "scipy>=1.10.0",
+        "scikit-learn>=1.0.0",
+        "pygam>=0.8.0,<=0.9.1",
+        "matplotlib>=3.5.0",
+        "tqdm>=4.60.0",
+    ],
+    entry_points={
+        'console_scripts': [
+            'run-example=prob_gbt.example:main',
+        ],
+    },
+    python_requires='>=3.9,<3.11',
+    author="Ilya Fastovets",
+    author_email="ilya.fastovets@gmail.com",
+    description="Probabilistic Gradient Boosted Trees for uncertainty estimation",
+    long_description=open("README.md").read(),
+    long_description_content_type="text/markdown",
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+    ],
+) 

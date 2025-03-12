@@ -34,21 +34,17 @@ ProbGBT is a probabilistic machine learning model that extends gradient boosted 
 
 ### Uncertainty Analysis
 
-<table>
-  <tr>
-    <td><img src="./images/uncertainty_vs_error.png" alt="Uncertainty vs Error" width="100%"/></td>
-    <td><img src="./images/feature_uncertainty.png" alt="Feature Importance and Uncertainty" width="100%"/></td>
-  </tr>
-  <tr>
-    <td colspan="2"><img src="./images/calibration_plot.png" alt="Calibration Plot" width="100%"/></td>
-  </tr>
-</table>
+![Uncertainty vs Error](./images/uncertainty_vs_error.png)
 
-*Top left: Relationship between confidence interval width and prediction error, showing how larger uncertainty correlates with larger errors.*
+*Relationship between confidence interval width and prediction error, showing how larger uncertainty correlates with larger errors.*
 
-*Top right: Feature importance and its relationship with prediction uncertainty, demonstrating which features contribute most to the model's predictions and uncertainty.*
+![Feature Importance and Uncertainty](./images/feature_uncertainty.png)
 
-*Bottom: Calibration plot showing how well the predicted confidence intervals match the observed coverage, with a focus on the 95% confidence level.*
+*Feature importance and its relationship with prediction uncertainty, demonstrating which features contribute most to the model's predictions and uncertainty.*
+
+![Calibration Plot](./images/calibration_plot.png)
+
+*Calibration plot showing how well the predicted confidence intervals match the observed coverage, with a focus on the 95% confidence level.*
 
 ## Installation
 

@@ -107,6 +107,45 @@ ProbGBT works by:
 3. **Smoothing**: Using Generalized Additive Models (GAMs) to smooth the quantile function
 4. **PDF Estimation**: Computing the derivative of the smoothed quantile function to obtain the probability density function
 
+### Technical Details on PDF Generation
+
+The PDF generation process in ProbGBT involves several sophisticated steps:
+
+1. **Non-uniform Quantile Generation**: 
+   - Instead of using uniformly spaced quantiles, ProbGBT transforms them using the normal distribution's PPF (Percent Point Function) and CDF (Cumulative Distribution Function)
+   - This places more focus on the tails of the distribution, improving the model's ability to capture extreme values
+   - The transformation uses: `non_uniform_quantiles = norm.cdf(norm.ppf(uniform_quantiles) * 3)`
+
+2. **Quantile Prediction with CatBoost**:
+   - The model leverages CatBoost's MultiQuantile loss function to predict all quantiles simultaneously
+   - This approach ensures consistency between quantiles and improves computational efficiency
+
+3. **Quantile Function Smoothing**:
+   - Raw quantile predictions can be noisy and may not form a proper monotonically increasing function
+   - A Generalized Additive Model (GAM) with monotonicity constraints is fitted to the predicted quantiles:
+     ```python
+     gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(quantiles, y_pred_sample)
+     ```
+   - This creates a smooth, monotonically increasing quantile function
+
+4. **PDF Calculation**:
+   - The PDF is computed as the derivative of the quantile function with respect to the probability
+   - Mathematically, if Q(p) is the quantile function, then PDF(y) = 1/Q'(F(y)) where F is the CDF
+   - In code, this is approximated using numerical differentiation:
+     ```python
+     pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
+     ```
+   - The small epsilon value (1e-10) prevents division by zero in flat regions
+
+5. **PDF Normalization**:
+   - The resulting PDF is normalized to ensure it integrates to 1.0, making it a valid probability density function:
+     ```python
+     pdf_smooth /= np.trapz(pdf_smooth, y_pred_smooth)
+     ```
+   - This uses the trapezoidal rule for numerical integration
+
+This approach allows ProbGBT to generate flexible, non-parametric probability distributions that can capture complex uncertainty patterns in the data, including multi-modal distributions, skewness, and heteroscedasticity.
+
 ## API Reference
 
 ### ProbGBT Class

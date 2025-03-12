@@ -17,11 +17,38 @@ ProbGBT is a probabilistic machine learning model that extends gradient boosted 
 
 *Scatter plot showing predicted vs actual values with 95% confidence intervals for selected samples.*
 
-### Probability Density Function
+### Probability Density Functions
 
-![Probability Density Function](./images/predicted_pdf.png)
+<table>
+  <tr>
+    <td><img src="./images/predicted_pdf.png" alt="Single PDF Example" width="100%"/></td>
+  </tr>
+  <tr>
+    <td><img src="./images/multiple_pdfs.png" alt="Multiple PDFs for Different Price Ranges" width="100%"/></td>
+  </tr>
+</table>
 
-*Probability density function for a single example, showing the predicted distribution, actual value, and 95% confidence interval.*
+*Top: Detailed probability density function for a single example, showing the predicted distribution, actual value, and 95% confidence interval.*
+
+*Bottom: PDFs for houses in different price ranges (low, medium, high), demonstrating how the model captures different uncertainty patterns.*
+
+### Uncertainty Analysis
+
+<table>
+  <tr>
+    <td><img src="./images/uncertainty_vs_error.png" alt="Uncertainty vs Error" width="100%"/></td>
+    <td><img src="./images/calibration_plot.png" alt="Calibration Plot" width="100%"/></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="./images/feature_uncertainty.png" alt="Feature Importance and Uncertainty" width="100%"/></td>
+  </tr>
+</table>
+
+*Top left: Relationship between confidence interval width and prediction error, showing how larger uncertainty correlates with larger errors.*
+
+*Top right: Calibration plot showing how well the predicted confidence intervals match the observed coverage.*
+
+*Bottom: Feature importance and its relationship with prediction uncertainty, demonstrating which features contribute most to the model's predictions and uncertainty.*
 
 ## Installation
 

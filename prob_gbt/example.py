@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import os
 import sys
 from sklearn.model_selection import train_test_split
+from matplotlib.gridspec import GridSpec
 
 # Use relative imports for the package
 from .data.data_generator import generate_house_prices_dataset
@@ -36,8 +37,8 @@ def main():
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=50,
-        iterations=500,  # Reduced for faster execution
-        subsample=0.8,
+        iterations=3000,
+        subsample=1.0,
         random_seed=42
     )
 
@@ -105,6 +106,135 @@ def main():
     plt.grid(True)
     plt.savefig('./images/predicted_pdf.png', dpi=300, bbox_inches='tight')
     print("Saved PDF plot to ./images/predicted_pdf.png")
+
+    # NEW VISUALIZATIONS
+    
+    # 1. Multiple PDFs with different characteristics
+    print("\nPlotting multiple PDFs with different characteristics...")
+    # Select samples with different characteristics (low, medium, high prices)
+    sorted_indices = np.argsort(y_test)
+    diverse_indices = [
+        sorted_indices[len(sorted_indices) // 10],  # Low price
+        sorted_indices[len(sorted_indices) // 2],   # Medium price
+        sorted_indices[int(len(sorted_indices) * 0.9)]  # High price
+    ]
+    
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    for i, idx in enumerate(diverse_indices):
+        pdfs = model.predict_pdf(X_test.iloc[[idx]])
+        x_values, pdf_values = pdfs[0]
+        
+        axes[i].plot(x_values, pdf_values, label='PDF')
+        axes[i].axvline(x=y_test[idx], color='r', linestyle='--', label='Actual')
+        axes[i].axvline(x=y_pred[idx], color='g', linestyle='--', label='Predicted')
+        axes[i].fill_between(x_values, pdf_values, 
+                           where=(x_values >= lower_bounds[idx]) & (x_values <= upper_bounds[idx]), 
+                           alpha=0.3, color='blue', label='95% CI')
+        
+        price_category = "Low" if i == 0 else "Medium" if i == 1 else "High"
+        axes[i].set_title(f'{price_category} Price Example')
+        axes[i].set_xlabel('House Price')
+        if i == 0:
+            axes[i].set_ylabel('Probability Density')
+        axes[i].grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('./images/multiple_pdfs.png', dpi=300, bbox_inches='tight')
+    print("Saved multiple PDFs plot to ./images/multiple_pdfs.png")
+    
+    # 2. Confidence interval width vs. prediction error
+    print("\nPlotting confidence interval width vs. prediction error...")
+    ci_widths = upper_bounds - lower_bounds
+    prediction_errors = np.abs(y_test - y_pred)
+    
+    plt.figure(figsize=(10, 6))
+    plt.scatter(ci_widths, prediction_errors, alpha=0.5)
+    plt.xlabel('Confidence Interval Width')
+    plt.ylabel('Absolute Prediction Error')
+    plt.title('Relationship Between Uncertainty and Prediction Error')
+    plt.grid(True)
+    
+    # Add trend line
+    z = np.polyfit(ci_widths, prediction_errors, 1)
+    p = np.poly1d(z)
+    plt.plot(ci_widths, p(ci_widths), "r--", alpha=0.8, label=f'Trend: y={z[0]:.2f}x+{z[1]:.2f}')
+    plt.legend()
+    
+    plt.savefig('./images/uncertainty_vs_error.png', dpi=300, bbox_inches='tight')
+    print("Saved uncertainty vs. error plot to ./images/uncertainty_vs_error.png")
+    
+    # 3. Feature importance and uncertainty
+    print("\nPlotting feature importance and uncertainty relationship...")
+    # Get feature importances from the model
+    feature_importances = model.model.get_feature_importance()
+    feature_names = X_train.columns
+    
+    # Create a grid of subplots
+    fig = plt.figure(figsize=(15, 10))
+    gs = GridSpec(2, 3, figure=fig)  # Changed from 2x2 to 2x3 grid
+    
+    # Feature importance plot
+    ax1 = fig.add_subplot(gs[0, :])
+    sorted_idx = np.argsort(feature_importances)
+    ax1.barh(np.array(feature_names)[sorted_idx], feature_importances[sorted_idx])
+    ax1.set_title('Feature Importance')
+    ax1.set_xlabel('Importance')
+    
+    # Select top 3 important features
+    top_features_idx = np.argsort(feature_importances)[-3:]
+    top_features = np.array(feature_names)[top_features_idx]
+    
+    # Plot uncertainty vs. feature value for top features
+    for i, feature_idx in enumerate(top_features_idx):
+        feature_name = feature_names[feature_idx]
+        ax = fig.add_subplot(gs[1, i])
+        
+        if feature_name in cat_features:
+            # For categorical features, calculate average CI width per category
+            categories = X_test[feature_name].unique()
+            avg_widths = []
+            for cat in categories:
+                mask = X_test[feature_name] == cat
+                if np.sum(mask) > 0:  # Ensure there are samples in this category
+                    avg_widths.append(np.mean(ci_widths[mask]))
+                else:
+                    avg_widths.append(0)
+            
+            ax.bar(categories, avg_widths)
+            ax.set_title(f'Uncertainty vs. {feature_name}')
+            ax.set_xlabel(feature_name)
+            ax.set_ylabel('Avg. CI Width')
+        else:
+            # For numerical features, scatter plot
+            ax.scatter(X_test[feature_name], ci_widths, alpha=0.5)
+            ax.set_title(f'Uncertainty vs. {feature_name}')
+            ax.set_xlabel(feature_name)
+            ax.set_ylabel('CI Width')
+    
+    plt.tight_layout()
+    plt.savefig('./images/feature_uncertainty.png', dpi=300, bbox_inches='tight')
+    print("Saved feature importance and uncertainty plot to ./images/feature_uncertainty.png")
+    
+    # 4. Calibration plot - checking if confidence intervals are well-calibrated
+    print("\nCreating calibration plot for confidence intervals...")
+    confidence_levels = np.linspace(0.1, 0.99, 20)
+    observed_coverages = []
+    
+    for conf_level in confidence_levels:
+        lower, upper = model.predict_interval(X_test, confidence_level=conf_level)
+        coverage = np.mean((y_test >= lower) & (y_test <= upper))
+        observed_coverages.append(coverage)
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(confidence_levels, observed_coverages, 'o-', label='Observed coverage')
+    plt.plot([0, 1], [0, 1], 'k--', label='Ideal calibration')
+    plt.xlabel('Expected Coverage (Confidence Level)')
+    plt.ylabel('Observed Coverage')
+    plt.title('Calibration Plot for Confidence Intervals')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig('./images/calibration_plot.png', dpi=300, bbox_inches='tight')
+    print("Saved calibration plot to ./images/calibration_plot.png")
 
     print("\nExample completed. Check the generated plots in the images directory.")
 

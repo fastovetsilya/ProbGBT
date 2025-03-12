@@ -31,10 +31,10 @@ ENV/
 *.swo
 
 # Generated images
-*.png
-*.jpg
-*.jpeg
-*.gif
+# *.png  # Commented out to keep the images in the repository
+# *.jpg
+# *.jpeg
+# *.gif
 
 # Logs
 *.log

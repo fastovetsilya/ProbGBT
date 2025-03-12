@@ -83,8 +83,8 @@ def main():
     plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'k--', label='Perfect prediction')
     plt.legend()
     plt.grid(True)
-    plt.savefig('images/predictions_vs_actual.png', dpi=300, bbox_inches='tight')
-    print("Saved predictions vs actual plot to images/predictions_vs_actual.png")
+    plt.savefig('./images/predictions_vs_actual.png', dpi=300, bbox_inches='tight')
+    print("Saved predictions vs actual plot to ./images/predictions_vs_actual.png")
 
     # Plot PDF for a single example
     print("\nPlotting probability density function for a single example...")
@@ -103,8 +103,8 @@ def main():
     plt.title(f'Predicted Probability Distribution for Sample {sample_idx}')
     plt.legend()
     plt.grid(True)
-    plt.savefig('images/predicted_pdf.png', dpi=300, bbox_inches='tight')
-    print("Saved PDF plot to images/predicted_pdf.png")
+    plt.savefig('./images/predicted_pdf.png', dpi=300, bbox_inches='tight')
+    print("Saved PDF plot to ./images/predicted_pdf.png")
 
     print("\nExample completed. Check the generated plots in the images directory.")
 

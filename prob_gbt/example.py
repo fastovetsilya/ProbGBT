@@ -217,7 +217,10 @@ def main():
     
     # 4. Calibration plot - checking if confidence intervals are well-calibrated
     print("\nCreating calibration plot for confidence intervals...")
-    confidence_levels = np.linspace(0.1, 0.99, 20)
+    # Create confidence levels array with 0.95 included exactly
+    confidence_levels_1 = np.linspace(0.1, 0.94, 15)
+    confidence_levels_2 = np.linspace(0.96, 0.99, 4)
+    confidence_levels = np.concatenate([confidence_levels_1, np.array([0.95]), confidence_levels_2])
     observed_coverages = []
     
     for conf_level in confidence_levels:
@@ -228,11 +231,40 @@ def main():
     plt.figure(figsize=(10, 6))
     plt.plot(confidence_levels, observed_coverages, 'o-', label='Observed coverage')
     plt.plot([0, 1], [0, 1], 'k--', label='Ideal calibration')
+    
+    # Add vertical line at 95% confidence level
+    plt.axvline(x=0.95, color='r', linestyle='--', alpha=0.7, label='95% confidence level')
+    
+    # Find the observed coverage at 95% confidence level (or closest to it)
+    idx_95 = np.abs(confidence_levels - 0.95).argmin()
+    coverage_at_95 = observed_coverages[idx_95]
+    
+    # Add horizontal line from the 95% point to the y-axis
+    plt.plot([0, 0.95], [coverage_at_95, coverage_at_95], 'r--', alpha=0.7)
+    
+    # Add annotation for the 95% coverage value
+    plt.annotate(f'Coverage: {coverage_at_95:.2%}', 
+                 xy=(0.95, coverage_at_95),
+                 xytext=(0.7, coverage_at_95 - 0.05),
+                 arrowprops=dict(facecolor='red', shrink=0.05, width=1.5, headwidth=8),
+                 fontsize=10,
+                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.7))
+    
     plt.xlabel('Expected Coverage (Confidence Level)')
     plt.ylabel('Observed Coverage')
     plt.title('Calibration Plot for Confidence Intervals')
-    plt.grid(True)
-    plt.legend()
+    
+    # Add finer grid
+    plt.grid(True, which='major', linestyle='-', linewidth=0.8, alpha=0.7)
+    plt.grid(True, which='minor', linestyle=':', linewidth=0.5, alpha=0.5)
+    plt.minorticks_on()
+    
+    # Set axis limits for better visualization
+    plt.xlim(0, 1.05)
+    plt.ylim(0, 1.05)
+    
+    plt.legend(loc='lower right')
+    plt.tight_layout()
     plt.savefig('./images/calibration_plot.png', dpi=300, bbox_inches='tight')
     print("Saved calibration plot to ./images/calibration_plot.png")
 

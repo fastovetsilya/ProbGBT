@@ -5,25 +5,32 @@ import os
 import sys
 from sklearn.model_selection import train_test_split
 from matplotlib.gridspec import GridSpec
+from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
 
 # Use relative imports for the package
-from .data.data_generator import generate_house_prices_dataset
 from .prob_gbt import ProbGBT
 
 def main():
     # Create images directory if it doesn't exist
     os.makedirs("images", exist_ok=True)
 
-    # Generate synthetic house prices dataset
-    print("Generating synthetic house prices dataset...")
-    house_prices_df = generate_house_prices_dataset(num_samples=5000, random_seed=42)
-
+    # Load California housing prices dataset
+    print("Loading California housing prices dataset...")
+    housing_df = pd.read_csv("./prob_gbt/data/california_housing_prices/housing.csv")
+    
+    # Handle missing values if any
+    housing_df = housing_df.dropna()
+    
     # Split the data into features and target
-    X = house_prices_df.drop('house_price', axis=1)
-    y = np.array(house_prices_df['house_price'])
-
+    X = housing_df.drop('median_house_value', axis=1)
+    y = np.array(housing_df['median_house_value'])
+    
+    # Convert 'ocean_proximity' to categorical codes
+    X['ocean_proximity'] = X['ocean_proximity'].astype('category').cat.codes
+    
     # Define categorical features
-    cat_features = ['location_category', 'property_condition']
+    cat_features = ['ocean_proximity']
 
     # Split the data into train, validation, and test sets
     X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
@@ -37,9 +44,10 @@ def main():
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=50,
-        iterations=3000,
+        iterations=300,
         subsample=1.0,
-        random_seed=42
+        random_seed=42,
+        train_separate_models=False
     )
 
     model.train(
@@ -80,7 +88,7 @@ def main():
 
     plt.xlabel('Actual House Price')
     plt.ylabel('Predicted House Price')
-    plt.title('ProbGBT: Predicted vs Actual House Prices with 95% Confidence Intervals')
+    plt.title('ProbGBT: Predicted vs Actual California House Prices with 95% Confidence Intervals')
     plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'k--', label='Perfect prediction')
     plt.legend()
     plt.grid(True)
@@ -99,9 +107,36 @@ def main():
     plt.axvline(x=y_pred[sample_idx], color='g', linestyle='--', label='Predicted value')
     plt.fill_between(x_values, pdf_values, where=(x_values >= lower_bounds[sample_idx]) & (x_values <= upper_bounds[sample_idx]), 
                     alpha=0.3, color='blue', label='95% Confidence Interval')
+    
+    # Set appropriate y-axis limits to better visualize the PDF
+    # Use a more robust approach to handle sharp peaks while preserving the body of the distribution
+    # First, sort the PDF values and find the "elbow point" where the curve starts to rise sharply
+    sorted_pdf = np.sort(pdf_values)
+    # Calculate differences between consecutive values
+    diffs = np.diff(sorted_pdf)
+    # Find where the differences start to increase significantly (indicating the start of peaks)
+    # Use the 95th percentile of differences as a threshold for significant increase
+    threshold = np.percentile(diffs, 95)
+    peak_start_idx = np.where(diffs > threshold)[0]
+    
+    if len(peak_start_idx) > 0:
+        # If we found peaks, use the value at the start of the first significant peak as our limit
+        # and multiply by a factor to show some of the peak but not let it dominate
+        y_upper_limit = sorted_pdf[peak_start_idx[0]] * 2.5
+    else:
+        # If no sharp peaks, use a more conservative approach
+        y_upper_limit = np.percentile(pdf_values, 95) * 1.5
+    
+    # Ensure we're not cutting off too much of the distribution
+    # Make sure the limit is at least high enough to show the top 20% of non-peak values
+    min_acceptable_limit = np.percentile(pdf_values, 80)
+    y_upper_limit = max(y_upper_limit, min_acceptable_limit * 1.2)
+    
+    plt.ylim(0, y_upper_limit)
+    
     plt.xlabel('House Price')
     plt.ylabel('Probability Density')
-    plt.title(f'Predicted Probability Distribution for Sample {sample_idx}')
+    plt.title(f'Predicted Probability Distribution for California House Sample {sample_idx}')
     plt.legend()
     plt.grid(True)
     plt.savefig('./images/predicted_pdf.png', dpi=300, bbox_inches='tight')
@@ -120,6 +155,37 @@ def main():
     ]
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Store all PDF values to calculate a common y-axis limit
+    all_pdf_values = []
+    
+    # First pass to collect all PDF values
+    for i, idx in enumerate(diverse_indices):
+        pdfs = model.predict_pdf(X_test.iloc[[idx]])
+        x_values, pdf_values = pdfs[0]
+        all_pdf_values.extend(pdf_values)
+    
+    # Calculate a better common y-axis limit that handles sharp peaks
+    # Sort all PDF values
+    sorted_all_pdf = np.sort(all_pdf_values)
+    # Calculate differences between consecutive values
+    all_diffs = np.diff(sorted_all_pdf)
+    # Find where the differences start to increase significantly
+    threshold = np.percentile(all_diffs, 95)
+    peak_start_idx = np.where(all_diffs > threshold)[0]
+    
+    if len(peak_start_idx) > 0:
+        # If we found peaks, use the value at the start of the first significant peak
+        common_y_limit = sorted_all_pdf[peak_start_idx[0]] * 2.5
+    else:
+        # If no sharp peaks, use a more conservative approach
+        common_y_limit = np.percentile(all_pdf_values, 95) * 1.5
+    
+    # Ensure we're not cutting off too much of the distribution
+    min_acceptable_limit = np.percentile(all_pdf_values, 80)
+    common_y_limit = max(common_y_limit, min_acceptable_limit * 1.2)
+    
+    # Second pass to plot with the common y-axis limit
     for i, idx in enumerate(diverse_indices):
         pdfs = model.predict_pdf(X_test.iloc[[idx]])
         x_values, pdf_values = pdfs[0]
@@ -130,6 +196,9 @@ def main():
         axes[i].fill_between(x_values, pdf_values, 
                            where=(x_values >= lower_bounds[idx]) & (x_values <= upper_bounds[idx]), 
                            alpha=0.3, color='blue', label='95% CI')
+        
+        # Set the common y-axis limit
+        axes[i].set_ylim(0, common_y_limit)
         
         price_category = "Low" if i == 0 else "Medium" if i == 1 else "High"
         axes[i].set_title(f'{price_category} Price Example')
@@ -166,7 +235,15 @@ def main():
     # 3. Feature importance and uncertainty
     print("\nPlotting feature importance and uncertainty relationship...")
     # Get feature importances from the model
-    feature_importances = model.model.get_feature_importance()
+    if model.train_separate_models:
+        # For separate models, average the feature importances across all models
+        feature_importances = np.zeros(X_train.shape[1])
+        for q, m in model.trained_models.items():
+            feature_importances += m.get_feature_importance()
+        feature_importances /= len(model.trained_models)
+    else:
+        feature_importances = model.model.get_feature_importance()
+    
     feature_names = X_train.columns
     
     # Create a grid of subplots
@@ -223,9 +300,12 @@ def main():
     confidence_levels = np.concatenate([confidence_levels_1, np.array([0.95]), confidence_levels_2])
     observed_coverages = []
     
-    for conf_level in confidence_levels:
+    # Add progress bar for this computationally expensive operation
+    print("Calculating coverage for different confidence levels...")
+    for conf_level in tqdm(confidence_levels):
         lower, upper = model.predict_interval(X_test, confidence_level=conf_level)
         coverage = np.mean((y_test >= lower) & (y_test <= upper))
+        print(f"Coverage for {conf_level}: {coverage:.2%}")
         observed_coverages.append(coverage)
     
     plt.figure(figsize=(10, 6))

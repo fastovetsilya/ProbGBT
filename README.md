@@ -8,6 +8,7 @@ ProbGBT is a probabilistic machine learning model that extends gradient boosted 
 - **Non-parametric**: Makes no assumptions about the shape of the target distribution
 - **Flexible**: Works with both numerical and categorical features
 - **Efficient**: Built on top of CatBoost's fast gradient boosting implementation
+- **Multiple Training Strategies**: Supports both single model with MultiQuantile loss and separate models for each quantile
 
 ## Example Visualizations
 
@@ -76,6 +77,7 @@ poetry run run-example
 - scikit-learn
 - pygam
 - matplotlib
+- tqdm
 
 ## Usage
 
@@ -89,7 +91,7 @@ from sklearn.model_selection import train_test_split
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
 # Initialize and train the model
-model = ProbGBT(num_quantiles=50, iterations=1000)
+model = ProbGBT(num_quantiles=50, iterations=500, train_separate_models=False)
 model.train(X_train, y_train, cat_features=cat_features)
 
 # Make point predictions
@@ -104,29 +106,29 @@ pdfs = model.predict_pdf(X_test)
 
 ### Example Script
 
-The repository includes an example script that demonstrates how to use ProbGBT with a synthetic house prices dataset:
+The repository includes an example script that demonstrates how to use ProbGBT with the California housing prices dataset:
 
 ```bash
 # Using Python directly
-python -m prob_gbt.example
+python run_example.py
 
 # Using Poetry
 poetry run run-example
 ```
 
 This will:
-1. Generate a synthetic dataset
+1. Load the California housing prices dataset
 2. Train a ProbGBT model
 3. Make predictions with uncertainty estimates
 4. Calculate performance metrics
-5. Generate visualizations
+5. Generate visualizations in the 'images' directory
 
 ## How It Works
 
 ProbGBT works by:
 
 1. **Quantile Transformation**: Generating non-uniformly spaced quantiles with more focus on the tails of the distribution
-2. **Multi-Quantile Regression**: Training a CatBoost model to predict multiple quantiles simultaneously
+2. **Multi-Quantile Regression**: Training a CatBoost model to predict multiple quantiles simultaneously (or separate models for each quantile)
 3. **Smoothing**: Using Generalized Additive Models (GAMs) to smooth the quantile function
 4. **PDF Estimation**: Computing the derivative of the smoothed quantile function to obtain the probability density function
 
@@ -140,8 +142,11 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
    - The transformation uses: `non_uniform_quantiles = norm.cdf(norm.ppf(uniform_quantiles) * 3)`
 
 2. **Quantile Prediction with CatBoost**:
-   - The model leverages CatBoost's MultiQuantile loss function to predict all quantiles simultaneously
-   - This approach ensures consistency between quantiles and improves computational efficiency
+   - The model can use either:
+     - CatBoost's MultiQuantile loss function to predict all quantiles simultaneously (default)
+     - Separate CatBoost models for each quantile (when `train_separate_models=True`)
+   - The first approach ensures consistency between quantiles and improves computational efficiency
+   - The second approach may provide more flexibility for complex distributions
 
 3. **Quantile Function Smoothing**:
    - Raw quantile predictions can be noisy and may not form a proper monotonically increasing function
@@ -176,22 +181,24 @@ This approach allows ProbGBT to generate flexible, non-parametric probability di
 ```python
 ProbGBT(
     num_quantiles=50,
-    iterations=1000,
+    iterations=500,
     learning_rate=None,
     depth=None,
     subsample=1.0,
-    random_seed=42
+    random_seed=42,
+    train_separate_models=False
 )
 ```
 
 #### Parameters:
 
 - `num_quantiles`: Number of quantiles to predict (default: 50)
-- `iterations`: Maximum number of trees to build (default: 1000)
+- `iterations`: Maximum number of trees to build (default: 500)
 - `learning_rate`: Learning rate for the gradient boosting algorithm (default: None, uses CatBoost default)
 - `depth`: Depth of the trees (default: None, uses CatBoost default)
 - `subsample`: Subsample ratio of the training instances (default: 1.0)
 - `random_seed`: Random seed for reproducibility (default: 42)
+- `train_separate_models`: If True, train separate models for each quantile instead of using MultiQuantile loss (default: False)
 
 #### Methods:
 

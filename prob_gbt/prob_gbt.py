@@ -5,6 +5,7 @@ from scipy.stats import norm
 from scipy.interpolate import UnivariateSpline
 from scipy.integrate import cumulative_trapezoid
 from pygam import LinearGAM, s
+from tqdm import tqdm
 
 class ProbGBT:
     """
@@ -17,11 +18,12 @@ class ProbGBT:
     
     def __init__(self, 
                  num_quantiles=50, 
-                 iterations=1000, 
+                 iterations=500,
                  learning_rate=None, 
                  depth=None,
                  subsample=1.0,
-                 random_seed=42):
+                 random_seed=42,
+                 train_separate_models=False):
         """
         Initialize the ProbGBT model.
         
@@ -39,6 +41,8 @@ class ProbGBT:
             Subsample ratio of the training instances.
         random_seed : int, default=42
             Random seed for reproducibility.
+        train_separate_models : bool, default=False
+            If True, train separate models for each quantile instead of using MultiQuantile loss.
         """
         self.num_quantiles = num_quantiles
         self.iterations = iterations
@@ -46,7 +50,9 @@ class ProbGBT:
         self.depth = depth
         self.subsample = subsample
         self.random_seed = random_seed
+        self.train_separate_models = train_separate_models
         self.model = None
+        self.trained_models = {}
         self.quantiles = None
         
     def _generate_non_uniform_quantiles(self):
@@ -96,22 +102,48 @@ class ProbGBT:
         # Generate quantiles
         self.quantiles = self._generate_non_uniform_quantiles()
         
-        # Format quantiles for CatBoost
-        multiquantile_loss_str = str(self.quantiles.astype(float)).replace("[", "").replace("]", "").replace("\n", "").replace(" ", ", ")
-        
-        # Initialize CatBoost model
-        self.model = CatBoostRegressor(
-            cat_features=cat_features,
-            loss_function=f"MultiQuantile:alpha={multiquantile_loss_str}",
-            iterations=self.iterations,
-            learning_rate=self.learning_rate,
-            depth=self.depth,
-            subsample=self.subsample,
-            random_seed=self.random_seed
-        )
-        
-        # Train the model
-        self.model.fit(X, y, eval_set=eval_set, use_best_model=use_best_model, verbose=verbose)
+        if self.train_separate_models:
+            # Train separate models for each quantile
+            self.trained_models = {}
+            num_iter = self.iterations
+            
+            for q in tqdm(self.quantiles, disable=not verbose):
+                # Define quantile loss function
+                quantile_loss = f'Quantile:alpha={q}'
+                
+                # Create CatBoostRegressor model
+                model = CatBoostRegressor(
+                    cat_features=cat_features,
+                    loss_function=quantile_loss,
+                    iterations=num_iter,
+                    learning_rate=self.learning_rate,
+                    depth=self.depth,
+                    subsample=self.subsample,
+                    random_seed=self.random_seed
+                )
+                
+                # Train the model
+                model.fit(X, y, eval_set=eval_set, use_best_model=use_best_model, verbose=False)
+                
+                # Add the model to the trained_models dictionary
+                self.trained_models[q] = model
+        else:
+            # Format quantiles for CatBoost
+            multiquantile_loss_str = str(self.quantiles.astype(float)).replace("[", "").replace("]", "").replace("\n", "").replace(" ", ", ")
+            
+            # Initialize CatBoost model
+            self.model = CatBoostRegressor(
+                cat_features=cat_features,
+                loss_function=f"MultiQuantile:alpha={multiquantile_loss_str}",
+                iterations=self.iterations,
+                learning_rate=self.learning_rate,
+                depth=self.depth,
+                subsample=self.subsample,
+                random_seed=self.random_seed
+            )
+            
+            # Train the model
+            self.model.fit(X, y, eval_set=eval_set, use_best_model=use_best_model, verbose=verbose)
         
         return self
     
@@ -133,11 +165,35 @@ class ProbGBT:
         If return_quantiles=False:
             numpy.ndarray: Mean predictions with shape (n_samples,)
         """
-        if self.model is None:
+        if self.train_separate_models and not self.trained_models:
+            raise ValueError("Models have not been trained yet. Call train() first.")
+        elif not self.train_separate_models and self.model is None:
             raise ValueError("Model has not been trained yet. Call train() first.")
         
         # Get quantile predictions
-        quantile_preds = self.model.predict(X)
+        if self.train_separate_models:
+            # Convert X to DataFrame if it's not already
+            if not isinstance(X, pd.DataFrame):
+                if len(X.shape) == 1:
+                    X = pd.DataFrame([X])
+                else:
+                    X = pd.DataFrame(X)
+            
+            # Get predictions for each quantile
+            quantile_preds = []
+            for i in range(len(X)):
+                sample_preds = []
+                # Create a single-row DataFrame for this sample to preserve categorical features
+                sample_df = X.iloc[[i]]
+                
+                for q in self.quantiles:
+                    # Predict using the DataFrame directly instead of reshaping to numpy array
+                    sample_preds.append(self.trained_models[q].predict(sample_df)[0])
+                quantile_preds.append(sample_preds)
+            quantile_preds = np.array(quantile_preds)
+        else:
+            # Get quantile predictions from the single model
+            quantile_preds = self.model.predict(X)
         
         if return_quantiles:
             return quantile_preds
@@ -169,11 +225,13 @@ class ProbGBT:
         --------
         tuple: (lower_bounds, upper_bounds) arrays for the confidence intervals
         """
-        if self.model is None:
+        if self.train_separate_models and not self.trained_models:
+            raise ValueError("Models have not been trained yet. Call train() first.")
+        elif not self.train_separate_models and self.model is None:
             raise ValueError("Model has not been trained yet. Call train() first.")
         
         # Get quantile predictions
-        quantile_preds = self.model.predict(X)
+        quantile_preds = self.predict(X, return_quantiles=True)
         
         # For a single sample
         if len(quantile_preds.shape) == 1:
@@ -217,11 +275,13 @@ class ProbGBT:
         --------
         list of tuples: [(x_values, pdf_values), ...] for each sample
         """
-        if self.model is None:
+        if self.train_separate_models and not self.trained_models:
+            raise ValueError("Models have not been trained yet. Call train() first.")
+        elif not self.train_separate_models and self.model is None:
             raise ValueError("Model has not been trained yet. Call train() first.")
         
         # Get quantile predictions
-        quantile_preds = self.model.predict(X)
+        quantile_preds = self.predict(X, return_quantiles=True)
         
         # For a single sample
         if len(quantile_preds.shape) == 1:

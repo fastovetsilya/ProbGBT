@@ -254,4 +254,4 @@ MIT
 
 ## Acknowledgements
 
-This implementation is based on the concepts of quantile regression and uncertainty estimation in gradient boosted trees. 
+This implementation is based on the concepts of quantile regression and uncertainty estimation in gradient boosted trees.

@@ -206,6 +206,47 @@ ProbGBT(
 - `predict(X, return_quantiles=False)`: Make predictions
 - `predict_interval(X, confidence_level=0.95)`: Predict confidence intervals
 - `predict_pdf(X, num_points=1000)`: Predict probability density functions
+- `save(filepath, format='cbm', compression_level=6)`: Save the trained model to a file
+- `load(filepath, format='cbm')`: Load a saved model from a file
+
+### Save and Load Functionality
+
+ProbGBT models can be saved to disk and loaded later for inference:
+
+```python
+# Save a trained model
+model.save("model.cbm")  # For single model approach
+model.save("models.tar.xz")  # For separate models approach
+
+# Load a model
+loaded_model = ProbGBT()
+loaded_model.load("model.cbm")  # Load single model
+loaded_model.load("models.tar.xz")  # Load separate models
+```
+
+#### Save Method
+
+```python
+save(filepath, format='cbm', compression_level=6)
+```
+
+- `filepath`: Path to save the model. For separate models, use a `.tar.xz` extension.
+- `format`: Format for saving individual models. Options: 'cbm' (CatBoost binary), 'json'
+- `compression_level`: Compression level for xz compression (1-9, where 9 is highest). Only used with separate models.
+
+For the single model approach (when `train_separate_models=False`), this uses CatBoost's native `save_model` method.
+For the separate models approach (when `train_separate_models=True`), this saves each model separately and compresses them into a tar.xz file with progress bars for monitoring.
+
+#### Load Method
+
+```python
+load(filepath, format='cbm')
+```
+
+- `filepath`: Path to the saved model file.
+- `format`: Format of the saved model. Only used for loading individual models from a tar.xz archive.
+
+The method automatically detects whether the file is a single model or an archive of separate models based on the file extension.
 
 ## License
 

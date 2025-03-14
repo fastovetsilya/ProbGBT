@@ -303,17 +303,73 @@ class ProbGBT:
                     gmm = GaussianMixture(n_components=3, max_iter=1000)
                     gmm.fit(y_pred_smooth.reshape(-1, 1))
                     
-                    # Generate final smoothed PDF on a regular grid
-                    x_values = np.linspace(np.min(y_pred_smooth), np.max(y_pred_smooth), num_points)
-                    pdf_values = np.exp(gmm.score_samples(x_values.reshape(-1, 1)))
-                    
-                    # Normalize the PDF
-                    integral = np.trapz(pdf_values, x_values)
-                    if integral > 1e-10:
-                        pdf_values /= integral
+                    # Check if GMM converged
+                    if not gmm.converged_:
+                        print(f"Warning: GMM did not converge after {gmm.n_iter_} iterations, using spline result")
+                        x_values = y_pred_smooth
+                        pdf_values = pdf_smooth
                     else:
-                        # If integral is too small, use a uniform distribution
-                        pdf_values = np.ones_like(x_values) / len(x_values)
+                        # Generate final smoothed PDF on a regular grid
+                        x_values = np.linspace(np.min(y_pred_smooth), np.max(y_pred_smooth), num_points)
+                        pdf_values = np.exp(gmm.score_samples(x_values.reshape(-1, 1)))
+                        
+                        # Much more aggressive checks for problematic GMM outputs
+                        use_gmm = True
+                        
+                        # 1. Check for any invalid values
+                        if np.any(np.isnan(pdf_values)) or np.any(np.isinf(pdf_values)) or np.all(pdf_values < 1e-10):
+                            print(f"Warning: GMM produced invalid values, using spline result")
+                            use_gmm = False
+                            
+                        # 2. Check for extremely peaked distributions (very common failure mode)
+                        if use_gmm:
+                            pdf_max = np.max(pdf_values)
+                            pdf_mean = np.mean(pdf_values)
+                            if pdf_max > 100 * pdf_mean:  # Less extreme threshold to be more cautious
+                                print(f"Warning: GMM produced extremely peaked distribution (max/mean ratio: {pdf_max/pdf_mean:.1f}), using spline result")
+                                use_gmm = False
+                        
+                        # 3. Check for too narrow effective support (another common failure)
+                        if use_gmm:
+                            # Count points with significant probability mass
+                            significant_points = np.sum(pdf_values > pdf_max * 0.01)
+                            if significant_points < num_points * 0.01:  # Less than 1% of points have significant probability
+                                print(f"Warning: GMM output has too narrow effective support ({significant_points}/{num_points} significant points), using spline result")
+                                use_gmm = False
+                        
+                        # 4. Generate a test CDF and check its properties
+                        if use_gmm:
+                            # Normalize PDF first
+                            integral = np.trapz(pdf_values, x_values)
+                            if integral <= 1e-10:
+                                print(f"Warning: GMM produced too small integral ({integral}), using spline result")
+                                use_gmm = False
+                            else:
+                                # Normalize and compute test CDF
+                                pdf_values /= integral
+                                test_cdf = cumulative_trapezoid(pdf_values, x_values, initial=0)
+                                
+                                # Check that CDF is usable for confidence intervals
+                                if test_cdf[-1] <= 0.9:  # CDF should end close to 1
+                                    print(f"Warning: GMM produced CDF that doesn't reach 1 (max: {test_cdf[-1]:.3f}), using spline result")
+                                    use_gmm = False
+                                    
+                                # Check if CDF has enough distinct steps for quantile calculation
+                                elif np.count_nonzero(np.diff(test_cdf) > 1e-6) < 20:
+                                    print(f"Warning: GMM produced CDF with too few increasing steps, using spline result")
+                                    use_gmm = False
+                                    
+                                # Check if the CDF can extract reasonable quantiles
+                                elif any(np.isclose(np.searchsorted(test_cdf, q) / len(test_cdf), 0) or 
+                                         np.isclose(np.searchsorted(test_cdf, q) / len(test_cdf), 1) 
+                                         for q in [0.025, 0.25, 0.5, 0.75, 0.975]):
+                                    print(f"Warning: GMM produced CDF that would give extreme quantiles, using spline result")
+                                    use_gmm = False
+                        
+                        # Finally, use spline results if any test failed
+                        if not use_gmm:
+                            x_values = y_pred_smooth
+                            pdf_values = pdf_smooth
                         
                 except Exception as e:
                     # If GMM fails, fall back to the spline result
@@ -327,6 +383,9 @@ class ProbGBT:
             # Normalize CDF to ensure it ends at 1.0
             if cdf_values[-1] > 0:
                 cdf_values /= cdf_values[-1]
+            else:
+                print(f"Warning: CDF ends at zero, falling back to uniform CDF")
+                cdf_values = np.linspace(0, 1, len(x_values))
                 
             # Ensure CDF is strictly increasing (important for accurate quantile lookup)
             # Find places where CDF doesn't increase
@@ -390,7 +449,6 @@ class ProbGBT:
             lower_q = (1 - confidence_level) / 2
             upper_q = 1 - (1 - confidence_level) / 2
             
-            # For both methods, find the quantiles from the CDF
             # Using 'right' side to find the correct index for lower bound
             # (the first index where CDF value is >= lower_quantile)
             lower_idx = np.searchsorted(cdf_values, lower_q, side='right')

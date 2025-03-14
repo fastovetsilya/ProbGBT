@@ -221,7 +221,7 @@ class ProbGBT:
             # For a single sample
             return quantile_preds[median_idx]
     
-    def _get_smoothed_pdf(self, quantile_preds, i, num_points=1000, method='kde'):
+    def _get_smoothed_pdf(self, quantile_preds, i, num_points=1000, method='spline'):
         """
         Helper method to compute smoothed PDF for a single sample.
         
@@ -259,98 +259,98 @@ class ProbGBT:
             # Compute PDF (derivative of the quantile function)
             epsilon = 1e-10  # Small value to avoid division by zero
             pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
+            
+            # Simple method to ensure non-negativity
             pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
             
             # Normalize the PDF
-            pdf_smooth /= np.trapz(pdf_smooth, y_pred_smooth)
-            
-            return y_pred_smooth, pdf_smooth, quantiles_smooth, None
-            
-        elif method == 'kde':
-            # Method using spline smoothing, isotonic regression, and KDE
-            # Step 1: Generate smoothed CDF based on quantiles
-            # Fit a GAM to smooth the quantile function
-            # gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample).gridsearch(self.quantiles, y_pred_sample, progress=False)
-            gam = LinearGAM(s(0, constraints="monotonic_inc", lam=0.01)).fit(self.quantiles, y_pred_sample)
-
-            # Generate smoothed CDF
-            quantiles_smooth = np.linspace(0, 1, num_points)
-            y_cdf = gam.predict(quantiles_smooth)
-            
-            # Step 2: Compute the naive PDF using finite differences
-            dx = np.diff(y_cdf)
-            dy = np.diff(quantiles_smooth)
-            pdf_naive = dy / (dx + 1e-10)  # Small epsilon to avoid division by zero
-            x_pdf = y_cdf[:-1] + dx/2  # Centers of the intervals
-            
-            # Step 3: Apply isotonic regression to ensure non-negativity
-            iso_reg = IsotonicRegression(y_min=0)
-            pdf_iso = iso_reg.fit_transform(x_pdf, pdf_naive)
-            
-            # Step 4: Normalize the PDF
-            # Add safeguard for division by zero
-            integral = np.trapz(pdf_iso, x_pdf)
+            integral = np.trapz(pdf_smooth, y_pred_smooth)
             if integral > 1e-10:  # Only normalize if integral is not too close to zero
-                pdf_iso /= integral
+                pdf_smooth /= integral
             else:
                 # If integral is too small, use a uniform distribution instead
-                pdf_iso = np.ones_like(pdf_iso) / len(pdf_iso)
+                pdf_smooth = np.ones_like(pdf_smooth) / len(pdf_smooth)
             
-            # Step 5: Apply KDE for further smoothing with cross-validation
-            # Check for NaN or Inf values before proceeding
-            if np.any(np.isnan(pdf_iso)) or np.any(np.isinf(pdf_iso)) or np.any(np.isnan(x_pdf)) or np.any(np.isinf(x_pdf)):
-                # If there are NaNs or Infs, skip KDE and use the normalized PDF directly
-                x_kde = x_pdf
-                pdf_kde = pdf_iso
+            # Return the quantiles_smooth as the cdf_values for consistency
+            return y_pred_smooth, pdf_smooth, quantiles_smooth, quantiles_smooth
+            
+        elif method == 'kde':
+            # First get spline results as a base
+            # Fit a GAM to smooth the quantile function
+            gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
+            
+            # Generate smoothed CDF
+            quantiles_smooth = np.linspace(0, 1, num_points)
+            y_pred_smooth = gam.predict(quantiles_smooth)
+            
+            # Compute PDF (derivative of the quantile function)
+            epsilon = 1e-10  # Small value to avoid division by zero
+            pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
+            
+            # Simple method to ensure non-negativity
+            pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
+            
+            # Normalize the PDF
+            integral = np.trapz(pdf_smooth, y_pred_smooth)
+            if integral > 1e-10:
+                pdf_smooth /= integral
+            else:
+                pdf_smooth = np.ones_like(pdf_smooth) / len(pdf_smooth)
+            
+            # Now apply KDE on top of spline results
+            # Check for NaN or Inf values before proceeding with KDE
+            if np.any(np.isnan(pdf_smooth)) or np.any(np.isinf(pdf_smooth)) or np.any(np.isnan(y_pred_smooth)) or np.any(np.isinf(y_pred_smooth)):
+                # If there are NaNs or Infs, skip KDE and use spline results directly
+                x_values = y_pred_smooth
+                pdf_values = pdf_smooth
             else:
                 try:
-                    # Apply KDE with 'silverman' method for bandwidth selection
-                    kde = gaussian_kde(x_pdf, weights=pdf_iso, bw_method='silverman')
+                    # Apply KDE with automatic bandwidth selection
+                    kde = gaussian_kde(y_pred_smooth, weights=pdf_smooth)
                     
                     # Generate final smoothed PDF on a regular grid
-                    x_kde = np.linspace(np.min(x_pdf), np.max(x_pdf), num_points)
-                    pdf_kde = kde(x_kde)
+                    x_values = np.linspace(np.min(y_pred_smooth), np.max(y_pred_smooth), num_points)
+                    pdf_values = kde(x_values)
                     
-                    # Final normalization
-                    integral = np.trapz(pdf_kde, x_kde)
+                    # Final normalization of the PDF
+                    integral = np.trapz(pdf_values, x_values)
                     if integral > 1e-10:
-                        pdf_kde /= integral
+                        pdf_values /= integral
                     else:
                         # If integral is too small, use a uniform distribution
-                        pdf_kde = np.ones_like(x_kde) / len(x_kde)
+                        pdf_values = np.ones_like(x_values) / len(x_values)
                         
                 except Exception as e:
-                    # If KDE fails, fall back to the normalized isotonic regression result
-                    print(f"Warning: KDE failed, using isotonic regression result: {e}")
-                    x_kde = x_pdf
-                    pdf_kde = pdf_iso
+                    # If KDE fails, fall back to the spline result
+                    print(f"Warning: KDE failed, using spline result: {e}")
+                    x_values = y_pred_smooth
+                    pdf_values = pdf_smooth
             
-            # Compute CDF using cumulative_trapezoid for more accurate integration
-            # This replaces the manual for-loop integration which could cause distortions
-            cdf_kde = cumulative_trapezoid(pdf_kde, x_kde, initial=0)
+            # Compute CDF using cumulative_trapezoid for accurate integration
+            cdf_values = cumulative_trapezoid(pdf_values, x_values, initial=0)
             
             # Normalize CDF to ensure it ends at 1.0
-            if cdf_kde[-1] > 0:
-                cdf_kde /= cdf_kde[-1]
+            if cdf_values[-1] > 0:
+                cdf_values /= cdf_values[-1]
                 
             # Ensure CDF is strictly increasing (important for accurate quantile lookup)
             # Find places where CDF doesn't increase
-            not_increasing = np.where(np.diff(cdf_kde) <= 0)[0]
+            not_increasing = np.where(np.diff(cdf_values) <= 0)[0]
             if len(not_increasing) > 0:
                 # Apply a small correction where needed
                 epsilon = 1e-10
                 for idx in not_increasing:
-                    cdf_kde[idx+1] = cdf_kde[idx] + epsilon
+                    cdf_values[idx+1] = cdf_values[idx] + epsilon
                 
                 # Re-normalize to ensure CDF ends at 1.0
-                cdf_kde /= cdf_kde[-1]
+                cdf_values /= cdf_values[-1]
                 
-            return x_kde, pdf_kde, cdf_kde, quantiles_smooth
+            return x_values, pdf_values, cdf_values, quantiles_smooth
         
         else:
             raise ValueError(f"Unknown method: {method}. Choose from 'spline' or 'kde'.")
 
-    def predict_interval(self, X, confidence_level=0.95, method='kde', num_points=1000):
+    def predict_interval(self, X, confidence_level=0.95, method='spline', num_points=1000):
         """
         Predict confidence intervals for the given samples using the smoothed PDF.
         
@@ -386,59 +386,38 @@ class ProbGBT:
         
         # Add tqdm progress bar
         for i in tqdm(range(quantile_preds.shape[0]), desc="Processing samples"):
-            # Get smoothed PDF and CDF
+            # Get smoothed PDF and CDF (only compute once)
             x_values, pdf_values, cdf_values, quantiles_smooth = self._get_smoothed_pdf(
                 quantile_preds, i, num_points=num_points, method=method
             )
             
-            if method == 'kde':
-                # Using KDE method - find the quantiles from the CDF
-                lower_quantile = (1 - confidence_level) / 2
-                upper_quantile = 1 - (1 - confidence_level) / 2
-                
-                # Find indices closest to the desired quantiles
-                # Using 'right' side to find the correct index for lower bound
-                # (the first index where CDF value is >= lower_quantile)
-                lower_idx = np.searchsorted(cdf_values, lower_quantile, side='right')
-                
-                # Using 'left' side to find the correct index for upper bound
-                # (the first index where CDF value is >= upper_quantile)
-                upper_idx = np.searchsorted(cdf_values, upper_quantile, side='left')
-                
-                # Ensure indices are within bounds
-                lower_idx = max(0, min(lower_idx, len(x_values) - 1))
-                upper_idx = max(0, min(upper_idx, len(x_values) - 1))
-                
-                # Get the x values at those indices
-                lower_bound = x_values[lower_idx]
-                upper_bound = x_values[upper_idx]
-            else:
-                # Using spline method
-                x_values, pdf_values, quantiles_smooth, _ = self._get_smoothed_pdf(
-                    quantile_preds, i, num_points=num_points, method='spline'
-                )
-                
-                # Find the quantile values corresponding to the confidence interval
-                lower_q = (1 - confidence_level) / 2
-                upper_q = 1 - (1 - confidence_level) / 2
-                
-                # Find indices closest to the desired quantiles with proper side handling
-                lower_idx = np.searchsorted(quantiles_smooth, lower_q, side='right')
-                upper_idx = np.searchsorted(quantiles_smooth, upper_q, side='left')
-                
-                # Ensure indices are within bounds
-                lower_idx = max(0, min(lower_idx, len(x_values) - 1))
-                upper_idx = max(0, min(upper_idx, len(x_values) - 1))
-                
-                lower_bound = x_values[lower_idx]
-                upper_bound = x_values[upper_idx]
+            # Compute the quantile values corresponding to the confidence interval
+            lower_q = (1 - confidence_level) / 2
+            upper_q = 1 - (1 - confidence_level) / 2
+            
+            # For both methods, find the quantiles from the CDF
+            # Using 'right' side to find the correct index for lower bound
+            # (the first index where CDF value is >= lower_quantile)
+            lower_idx = np.searchsorted(cdf_values, lower_q, side='right')
+            
+            # Using 'left' side to find the correct index for upper bound
+            # (the first index where CDF value is >= upper_quantile)
+            upper_idx = np.searchsorted(cdf_values, upper_q, side='left')
+            
+            # Ensure indices are within bounds
+            lower_idx = max(0, min(lower_idx, len(x_values) - 1))
+            upper_idx = max(0, min(upper_idx, len(x_values) - 1))
+            
+            # Get the x values at those indices
+            lower_bound = x_values[lower_idx]
+            upper_bound = x_values[upper_idx]
             
             lower_bounds.append(lower_bound)
             upper_bounds.append(upper_bound)
         
         return np.array(lower_bounds), np.array(upper_bounds)
     
-    def predict_pdf(self, X, num_points=1000, method='kde', gaussian_sigma=1.0):
+    def predict_pdf(self, X, num_points=1000, method='spline'):
         """
         Predict the probability density function for the given samples.
         
@@ -450,11 +429,8 @@ class ProbGBT:
             Number of points to use for the PDF.
         method : str, default='kde'
             Method to use for PDF smoothing:
-            - 'kde': Kernel Density Estimation with isotonic regression (recommended)
-            - 'spline': Original method using GAM smoothing
-        gaussian_sigma : float, default=1.0
-            Sigma parameter for Gaussian filter smoothing if used instead of isotonic regression.
-            Higher values create smoother PDFs.
+            - 'kde': Kernel Density Estimation applied on top of spline smoothing (recommended)
+            - 'spline': Original method using GAM smoothing only
             
         Returns:
         --------

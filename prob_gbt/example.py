@@ -43,8 +43,8 @@ def main():
     # Initialize and train the ProbGBT model
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
-        num_quantiles=200,
-        iterations=1000,
+        num_quantiles=100,
+        iterations=5000,
         subsample=1.0,
         random_seed=42,
         train_separate_models=False
@@ -69,7 +69,7 @@ def main():
 
     # Predict confidence intervals
     print("\nPredicting confidence intervals...")
-    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95, method='kde')
+    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95)
     
     # Plot predictions vs actual for a subset of test samples
     print("\nPlotting predictions vs actual values...")
@@ -247,7 +247,7 @@ def main():
     print("Calculating coverage for different confidence levels...")
     for conf_level in tqdm(confidence_levels, desc="Evaluating confidence levels"):
         # Get interval bounds for this confidence level using the same method
-        lower, upper = model.predict_interval(X_test, confidence_level=conf_level, method='kde')
+        lower, upper = model.predict_interval(X_test, confidence_level=conf_level)
         
         # Calculate coverage
         coverage = np.mean((y_test >= lower) & (y_test <= upper))

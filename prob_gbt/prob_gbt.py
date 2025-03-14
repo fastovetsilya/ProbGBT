@@ -4,18 +4,11 @@ import os
 import tarfile
 import json
 import tempfile
-import shutil
-import sys
-import io
-from contextlib import redirect_stdout
 from catboost import CatBoostRegressor
-from scipy.stats import norm, gaussian_kde
-from scipy.interpolate import UnivariateSpline
+from scipy.stats import norm
 from scipy.integrate import cumulative_trapezoid
-from scipy.ndimage import gaussian_filter1d
 from pygam import LinearGAM, s
-from sklearn.isotonic import IsotonicRegression
-from sklearn.model_selection import KFold
+from sklearn.mixture import GaussianMixture
 from tqdm import tqdm
 
 class ProbGBT:
@@ -234,8 +227,8 @@ class ProbGBT:
             Index of the sample in quantile_preds to process.
         num_points : int, default=1000
             Number of points to use for the PDF.
-        method : str, default='kde'
-            Method to use for PDF smoothing ('kde' or 'spline').
+        method : str, default='gmm'
+            Method to use for PDF smoothing ('gmm' or 'spline').
             
         Returns:
         --------
@@ -275,7 +268,7 @@ class ProbGBT:
             # Return the quantiles_smooth as the cdf_values for consistency
             return y_pred_smooth, pdf_smooth, quantiles_smooth, quantiles_smooth
             
-        elif method == 'kde':
+        elif method == 'gmm':
             # First get spline results as a base
             # Fit a GAM to smooth the quantile function
             gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
@@ -298,22 +291,23 @@ class ProbGBT:
             else:
                 pdf_smooth = np.ones_like(pdf_smooth) / len(pdf_smooth)
             
-            # Now apply KDE on top of spline results
-            # Check for NaN or Inf values before proceeding with KDE
+            # Now apply GMM on top of spline results
+            # Check for NaN or Inf values before proceeding with GMM
             if np.any(np.isnan(pdf_smooth)) or np.any(np.isinf(pdf_smooth)) or np.any(np.isnan(y_pred_smooth)) or np.any(np.isinf(y_pred_smooth)):
-                # If there are NaNs or Infs, skip KDE and use spline results directly
+                # If there are NaNs or Infs, skip GMM and use spline results directly
                 x_values = y_pred_smooth
                 pdf_values = pdf_smooth
             else:
                 try:
-                    # Apply KDE with automatic bandwidth selection
-                    kde = gaussian_kde(y_pred_smooth, weights=pdf_smooth)
+                    # Use a gaussian mixture model
+                    gmm = GaussianMixture(n_components=3, max_iter=1000)
+                    gmm.fit(y_pred_smooth.reshape(-1, 1))
                     
                     # Generate final smoothed PDF on a regular grid
                     x_values = np.linspace(np.min(y_pred_smooth), np.max(y_pred_smooth), num_points)
-                    pdf_values = kde(x_values)
+                    pdf_values = np.exp(gmm.score_samples(x_values.reshape(-1, 1)))
                     
-                    # Final normalization of the PDF
+                    # Normalize the PDF
                     integral = np.trapz(pdf_values, x_values)
                     if integral > 1e-10:
                         pdf_values /= integral
@@ -322,8 +316,8 @@ class ProbGBT:
                         pdf_values = np.ones_like(x_values) / len(x_values)
                         
                 except Exception as e:
-                    # If KDE fails, fall back to the spline result
-                    print(f"Warning: KDE failed, using spline result: {e}")
+                    # If GMM fails, fall back to the spline result
+                    print(f"Warning: GMM failed, using spline result: {e}")
                     x_values = y_pred_smooth
                     pdf_values = pdf_smooth
             
@@ -349,7 +343,7 @@ class ProbGBT:
             return x_values, pdf_values, cdf_values, quantiles_smooth
         
         else:
-            raise ValueError(f"Unknown method: {method}. Choose from 'spline' or 'kde'.")
+            raise ValueError(f"Unknown method: {method}. Choose from 'spline' or 'gmm'.")
 
     def predict_interval(self, X, confidence_level=0.95, method='spline', num_points=1000):
         """
@@ -361,8 +355,8 @@ class ProbGBT:
             Features to predict on.
         confidence_level : float, default=0.95
             Confidence level for the interval (between 0 and 1).
-        method : str, default='kde'
-            Method to use for PDF smoothing ('kde' or 'spline').
+        method : str, default='gmm'
+            Method to use for PDF smoothing ('gmm' or 'spline').
         num_points : int, default=1000
             Number of points to use for the PDF.
             
@@ -428,10 +422,10 @@ class ProbGBT:
             Features to predict on.
         num_points : int, default=1000
             Number of points to use for the PDF.
-        method : str, default='kde'
+        method : str, default='spline'
             Method to use for PDF smoothing:
-            - 'kde': Kernel Density Estimation applied on top of spline smoothing (recommended)
-            - 'spline': Original method using GAM smoothing only
+            - 'spline': Original method using GAM smoothing only (recommended)
+            - 'gmm': Kernel Density Estimation applied on top of spline smoothing 
             
         Returns:
         --------

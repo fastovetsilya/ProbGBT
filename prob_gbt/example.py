@@ -44,10 +44,10 @@ def main():
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=50,
-        iterations=300,
+        iterations=200,
         subsample=1.0,
         random_seed=42,
-        train_separate_models=True
+        train_separate_models=False
     )
 
     model.train(
@@ -69,7 +69,7 @@ def main():
 
     # Predict confidence intervals
     print("\nPredicting confidence intervals...")
-    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95)
+    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95, method='gmm')
     
     # Plot predictions vs actual for a subset of test samples
     print("\nPlotting predictions vs actual values...")
@@ -94,7 +94,7 @@ def main():
     # Plot PDF for a single example
     print("\nPlotting probability density function for a single example...")
     sample_idx = sample_indices[0]
-    pdfs = model.predict_pdf(X_test.iloc[[sample_idx]])
+    pdfs = model.predict_pdf(X_test.iloc[[sample_idx]], method='gmm')
     x_values, pdf_values = pdfs[0]
 
     plt.figure(figsize=(10, 6))
@@ -133,7 +133,7 @@ def main():
     
     # Second pass to plot without y-axis limit adjustments
     for i, idx in enumerate(diverse_indices):
-        pdfs = model.predict_pdf(X_test.iloc[[idx]])
+        pdfs = model.predict_pdf(X_test.iloc[[idx]], method='gmm')
         x_values, pdf_values = pdfs[0]
         
         axes[i].plot(x_values, pdf_values, label='PDF')
@@ -257,7 +257,7 @@ def main():
     print("Calculating coverage for different confidence levels...")
     for conf_level in tqdm(confidence_levels, desc="Evaluating confidence levels"):
         # Get interval bounds for this confidence level using the same method
-        lower, upper = model.predict_interval(X_test, confidence_level=conf_level)
+        lower, upper = model.predict_interval(X_test, confidence_level=conf_level, method='gmm')
         
         # Calculate coverage
         coverage = np.mean((y_test >= lower) & (y_test <= upper))

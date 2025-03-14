@@ -43,8 +43,8 @@ def main():
     # Initialize and train the ProbGBT model
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
-        num_quantiles=50,
-        iterations=300,
+        num_quantiles=200,
+        iterations=1000,
         subsample=1.0,
         random_seed=42,
         train_separate_models=False
@@ -69,7 +69,7 @@ def main():
 
     # Predict confidence intervals
     print("\nPredicting confidence intervals...")
-    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95)
+    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95, method='kde')
     
     # Plot predictions vs actual for a subset of test samples
     print("\nPlotting predictions vs actual values...")
@@ -230,21 +230,10 @@ def main():
     plt.savefig('./images/feature_uncertainty.png', dpi=300, bbox_inches='tight')
     print("Saved feature importance and uncertainty plot to ./images/feature_uncertainty.png")
     
-    # Calculate coverage from PDFs after all other plots are saved
-    print("\nCalculating coverage from smoothed PDFs...")
-    coverage_counts = 0
-    for i in range(len(X_test)):
-        # Get PDF for this sample
-        pdfs = model.predict_pdf(X_test.iloc[[i]])
-        x_values, pdf_values = pdfs[0]
-        
-        # Check if actual value falls within the PDF's 95% confidence region
-        in_ci = (y_test[i] >= lower_bounds[i]) and (y_test[i] <= upper_bounds[i])
-        coverage_counts += int(in_ci)
-    
-    # Calculate overall coverage
-    coverage = coverage_counts / len(X_test)
-    print(f"95% Confidence Interval Coverage (from PDFs): {coverage:.2%}")
+    # Calculate coverage from intervals (using the direct interval method)
+    print("\nCalculating confidence interval coverage...")
+    coverage = np.mean((y_test >= lower_bounds) & (y_test <= upper_bounds))
+    print(f"95% Confidence Interval Coverage: {coverage:.2%}")
     
     # 4. Calibration plot - checking if confidence intervals are well-calibrated
     print("\nCreating calibration plot for confidence intervals...")
@@ -254,17 +243,16 @@ def main():
     confidence_levels = np.concatenate([confidence_levels_1, np.array([0.95]), confidence_levels_2])
     observed_coverages = []
     
-    # Add progress bar for this computationally expensive operation
+    # Use tqdm for a single progress bar, with no extra print output
     print("Calculating coverage for different confidence levels...")
-    for conf_level in tqdm(confidence_levels):
-        # Get interval bounds for this confidence level
-        lower, upper = model.predict_interval(X_test, confidence_level=conf_level)
+    for conf_level in tqdm(confidence_levels, desc="Evaluating confidence levels"):
+        # Get interval bounds for this confidence level using the same method
+        lower, upper = model.predict_interval(X_test, confidence_level=conf_level, method='kde')
         
-        # Use direct interval checking instead of computing full PDFs
+        # Calculate coverage
         coverage = np.mean((y_test >= lower) & (y_test <= upper))
-        
-        print(f"Coverage for {conf_level}: {coverage:.2%}")
         observed_coverages.append(coverage)
+        print(f"Coverage for {conf_level}: {coverage:.2%}")
     
     plt.figure(figsize=(10, 6))
     plt.plot(confidence_levels, observed_coverages, 'o-', label='Observed coverage')

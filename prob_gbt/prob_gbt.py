@@ -6,10 +6,13 @@ import json
 import tempfile
 import shutil
 from catboost import CatBoostRegressor
-from scipy.stats import norm
+from scipy.stats import norm, gaussian_kde
 from scipy.interpolate import UnivariateSpline
 from scipy.integrate import cumulative_trapezoid
+from scipy.ndimage import gaussian_filter1d
 from pygam import LinearGAM, s
+from sklearn.isotonic import IsotonicRegression
+from sklearn.model_selection import KFold
 from tqdm import tqdm
 
 class ProbGBT:
@@ -265,7 +268,7 @@ class ProbGBT:
         
         return np.array(lower_bounds), np.array(upper_bounds)
     
-    def predict_pdf(self, X, num_points=1000):
+    def predict_pdf(self, X, num_points=1000, method='kde', gaussian_sigma=1.0):
         """
         Predict the probability density function for the given samples.
         
@@ -275,6 +278,13 @@ class ProbGBT:
             Features to predict on.
         num_points : int, default=1000
             Number of points to use for the PDF.
+        method : str, default='kde'
+            Method to use for PDF smoothing:
+            - 'kde': Kernel Density Estimation with isotonic regression (recommended)
+            - 'spline': Original method using GAM smoothing
+        gaussian_sigma : float, default=1.0
+            Sigma parameter for Gaussian filter smoothing if used instead of isotonic regression.
+            Higher values create smoother PDFs.
             
         Returns:
         --------
@@ -294,26 +304,131 @@ class ProbGBT:
         
         results = []
         
-        for i in range(quantile_preds.shape[0]):
-            # Get the predicted quantiles for this sample
-            y_pred_sample = quantile_preds[i]
-            
-            # Fit a GAM to smooth the quantile function
-            gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
-            
-            # Generate smoothed CDF
-            quantiles_smooth = np.linspace(0, 1, num_points)
-            y_pred_smooth = gam.predict(quantiles_smooth)
-            
-            # Compute PDF (derivative of the quantile function)
-            epsilon = 1e-10  # Small value to avoid division by zero
-            pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
-            pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
-            
-            # Normalize the PDF
-            pdf_smooth /= np.trapz(pdf_smooth, y_pred_smooth)
-            
-            results.append((y_pred_smooth, pdf_smooth))
+        if method == 'spline':
+            # Original method using GAM smoothing
+            for i in range(quantile_preds.shape[0]):
+                # Get the predicted quantiles for this sample
+                y_pred_sample = quantile_preds[i]
+                
+                # Fit a GAM to smooth the quantile function
+                gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
+                
+                # Generate smoothed CDF
+                quantiles_smooth = np.linspace(0, 1, num_points)
+                y_pred_smooth = gam.predict(quantiles_smooth)
+                
+                # Compute PDF (derivative of the quantile function)
+                epsilon = 1e-10  # Small value to avoid division by zero
+                pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
+                pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
+                
+                # Normalize the PDF
+                pdf_smooth /= np.trapz(pdf_smooth, y_pred_smooth)
+                
+                results.append((y_pred_smooth, pdf_smooth))
+        
+        elif method == 'kde':
+            # Method using spline smoothing, isotonic regression, and KDE
+            for i in range(quantile_preds.shape[0]):
+                # Get the predicted quantiles for this sample
+                y_pred_sample = quantile_preds[i]
+                
+                # Step 1: Generate smoothed CDF based on quantiles
+                # Fit a GAM to smooth the quantile function
+                gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
+                gam.gridsearch(self.quantiles, y_pred_sample)
+
+                # Generate smoothed CDF
+                quantiles_smooth = np.linspace(0, 1, num_points)
+                y_cdf = gam.predict(quantiles_smooth)
+                
+                # Step 2: Compute the naive PDF using finite differences
+                dx = np.diff(y_cdf)
+                dy = np.diff(quantiles_smooth)
+                pdf_naive = dy / (dx + 1e-10)  # Small epsilon to avoid division by zero
+                x_pdf = y_cdf[:-1] + dx/2  # Centers of the intervals
+                
+                # Step 3: Apply isotonic regression to ensure non-negativity
+                iso_reg = IsotonicRegression(y_min=0)
+                pdf_iso = iso_reg.fit_transform(x_pdf, pdf_naive)
+                
+                # Step 4: Normalize the PDF
+                # Add safeguard for division by zero
+                integral = np.trapz(pdf_iso, x_pdf)
+                if integral > 1e-10:  # Only normalize if integral is not too close to zero
+                    pdf_iso /= integral
+                else:
+                    # If integral is too small, use a uniform distribution instead
+                    pdf_iso = np.ones_like(pdf_iso) / len(pdf_iso)
+                
+                # Step 5: Apply KDE for further smoothing with cross-validation
+                # Find optimal bandwidth using cross-validation
+                best_score = float('-inf')
+                best_bw = 0.01  # Default value
+                
+                # Check for NaN or Inf values before proceeding
+                if np.any(np.isnan(pdf_iso)) or np.any(np.isinf(pdf_iso)) or np.any(np.isnan(x_pdf)) or np.any(np.isinf(x_pdf)):
+                    # If there are NaNs or Infs, skip KDE and use the normalized PDF directly
+                    x_kde = x_pdf
+                    pdf_kde = pdf_iso
+                else:
+                    # Cross-validate with different bandwidths if we have enough data points
+                    if len(x_pdf) > 10:
+                        bandwidths = np.logspace(-3, 0, 10)  # Try different bandwidths
+                        kf = KFold(n_splits=min(5, len(x_pdf)), shuffle=True, random_state=self.random_seed)
+                        
+                        for bw in bandwidths:
+                            cv_scores = []
+                            for train_idx, test_idx in kf.split(x_pdf):
+                                if len(train_idx) < 3:  # Skip if not enough training data
+                                    continue
+                                
+                                # Make sure there are no NaN or Inf values
+                                if np.any(np.isnan(pdf_iso[train_idx])) or np.any(np.isinf(pdf_iso[train_idx])):
+                                    continue
+                                
+                                try:
+                                    # Train KDE on training indices
+                                    kde = gaussian_kde(x_pdf[train_idx], weights=pdf_iso[train_idx], bw_method=bw)
+                                    
+                                    # Evaluate on test indices
+                                    score = np.mean(kde.logpdf(x_pdf[test_idx]))
+                                    cv_scores.append(score)
+                                except Exception as e:
+                                    # If there's an error in KDE, skip this bandwidth
+                                    print(f"Warning: KDE error with bandwidth {bw}: {e}")
+                                    continue
+                            
+                            if cv_scores and np.mean(cv_scores) > best_score:
+                                best_score = np.mean(cv_scores)
+                                best_bw = bw
+                    
+                    try:
+                        # Apply KDE with best bandwidth
+                        kde = gaussian_kde(x_pdf, weights=pdf_iso, bw_method=best_bw)
+                        
+                        # Generate final smoothed PDF on a regular grid
+                        x_kde = np.linspace(np.min(x_pdf), np.max(x_pdf), num_points)
+                        pdf_kde = kde(x_kde)
+                        
+                        # Final normalization
+                        integral = np.trapz(pdf_kde, x_kde)
+                        if integral > 1e-10:
+                            pdf_kde /= integral
+                        else:
+                            # If integral is too small, use a uniform distribution
+                            pdf_kde = np.ones_like(x_kde) / len(x_kde)
+                            
+                    except Exception as e:
+                        # If KDE fails, fall back to the normalized isotonic regression result
+                        print(f"Warning: KDE failed, using isotonic regression result: {e}")
+                        x_kde = x_pdf
+                        pdf_kde = pdf_iso
+                
+                results.append((x_kde, pdf_kde))
+        
+        else:
+            raise ValueError(f"Unknown method: {method}. Choose from 'spline' or 'kde'.")
         
         return results
     

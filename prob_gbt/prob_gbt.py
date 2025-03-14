@@ -192,7 +192,8 @@ class ProbGBT:
             
             # Get predictions for each quantile
             quantile_preds = []
-            for i in range(len(X)):
+            # Add tqdm progress bar
+            for i in tqdm(range(len(X)), desc="Making predictions"):
                 sample_preds = []
                 # Create a single-row DataFrame for this sample to preserve categorical features
                 sample_df = X.iloc[[i]]

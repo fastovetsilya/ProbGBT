@@ -43,11 +43,11 @@ def main():
     # Initialize and train the ProbGBT model
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
-        num_quantiles=100,
-        iterations=5000,
+        num_quantiles=50,
+        iterations=300,
         subsample=1.0,
         random_seed=42,
-        train_separate_models=False
+        train_separate_models=True
     )
 
     model.train(
@@ -104,6 +104,11 @@ def main():
     plt.fill_between(x_values, pdf_values, where=(x_values >= lower_bounds[sample_idx]) & (x_values <= upper_bounds[sample_idx]), 
                     alpha=0.3, color='blue', label='95% Confidence Interval')
     
+    # Set y-axis limit to 1e-4 if there are values higher than that
+    y_max = np.max(pdf_values)
+    if y_max > 1e-4:
+        plt.ylim(0, 1e-4)
+    
     plt.xlabel('House Price')
     plt.ylabel('Probability Density')
     plt.title(f'Predicted Probability Distribution for California House Sample {sample_idx}')
@@ -137,6 +142,11 @@ def main():
         axes[i].fill_between(x_values, pdf_values, 
                            where=(x_values >= lower_bounds[idx]) & (x_values <= upper_bounds[idx]), 
                            alpha=0.3, color='blue', label='95% CI')
+        
+        # Set y-axis limit to 1e-4 if there are values higher than that
+        y_max = np.max(pdf_values)
+        if y_max > 1e-4:
+            axes[i].set_ylim(0, 1e-4)
         
         price_category = "Low" if i == 0 else "Medium" if i == 1 else "High"
         axes[i].set_title(f'{price_category} Price Example')

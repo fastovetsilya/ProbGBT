@@ -3,10 +3,16 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 import sys
+import warnings
 from sklearn.model_selection import train_test_split
 from matplotlib.gridspec import GridSpec
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
+
+# Suppress PyGAM and other warnings
+warnings.filterwarnings("ignore", message=".*[Dd]id not converge.*")
+warnings.filterwarnings("ignore", message=".*[Cc]onvergence.*") 
+warnings.filterwarnings("ignore", category=UserWarning, module="pygam")
 
 # Use relative imports for the package
 from .prob_gbt import ProbGBT
@@ -55,7 +61,7 @@ def main():
         y_train, 
         cat_features=cat_features, 
         eval_set=(X_val, y_val), 
-        use_best_model=True, 
+        use_best_model=False,
         verbose=True
     )
 
@@ -66,6 +72,12 @@ def main():
     # Calculate RMSE
     rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
     print(f"Root Mean Squared Error (RMSE): {rmse:.2f}")
+
+    # Calculate CRPS
+    print("\nEvaluating Continuous Ranked Probability Score (CRPS)...")
+    crps = model.evaluate_crps(X_test, y_test, subset_fraction=0.2, verbose=True)
+    print(f"Continuous Ranked Probability Score (CRPS): {crps:.6f}")
+    print("Lower CRPS values indicate better probabilistic predictions.")
 
     # Predict confidence intervals
     print("\nPredicting confidence intervals...")

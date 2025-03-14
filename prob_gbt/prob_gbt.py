@@ -5,12 +5,47 @@ import tarfile
 import json
 import tempfile
 import shutil
+import warnings
+import sys
+import contextlib
 from catboost import CatBoostRegressor
 from scipy.stats import norm
 from scipy.interpolate import UnivariateSpline
 from scipy.integrate import cumulative_trapezoid
 from pygam import LinearGAM, s
 from tqdm import tqdm
+import properscoring as ps
+
+# Global warning suppression for pygam convergence warnings
+# This helps ensure warnings are suppressed everywhere in the code
+warnings.filterwarnings("ignore", message=".*[Dd]id not converge.*")
+warnings.filterwarnings("ignore", message=".*[Cc]onvergence.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="pygam")
+
+# Context manager to completely silence stdout and stderr
+class SilenceOutput:
+    """
+    Context manager to completely suppress all stdout and stderr output.
+    This is used to silence PyGAM's output that may bypass warning filters.
+    """
+    def __init__(self):
+        # Open null devices
+        self.null_fds = [os.open(os.devnull, os.O_RDWR) for _ in range(2)]
+        # Save the actual file descriptors
+        self.save_fds = [os.dup(1), os.dup(2)]
+        
+    def __enter__(self):
+        # Assign the null pointers to stdout and stderr
+        os.dup2(self.null_fds[0], 1)
+        os.dup2(self.null_fds[1], 2)
+        
+    def __exit__(self, *args):
+        # Re-assign the original file descriptors to stdout and stderr
+        os.dup2(self.save_fds[0], 1)
+        os.dup2(self.save_fds[1], 2)
+        # Close all file descriptors
+        for fd in self.null_fds + self.save_fds:
+            os.close(fd)
 
 class ProbGBT:
     """
@@ -36,7 +71,7 @@ class ProbGBT:
         -----------
         num_quantiles : int, default=50
             Number of quantiles to predict.
-        iterations : int, default=1000
+        iterations : int, default=500
             Maximum number of trees to build.
         learning_rate : float, optional
             Learning rate for the gradient boosting algorithm.
@@ -80,7 +115,103 @@ class ProbGBT:
         
         return non_uniform_quantiles
     
-    def train(self, X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True):
+    def _smooth_quantile_function(self, quantiles, predictions, num_points=1000):
+        """
+        Create smoothed quantile function, CDF and PDF from discrete quantiles.
+        
+        Parameters:
+        -----------
+        quantiles : numpy.ndarray
+            Quantile values (between 0 and 1).
+        predictions : numpy.ndarray
+            Predicted values for each quantile.
+        num_points : int, default=1000
+            Number of points to use for smoothing.
+            
+        Returns:
+        --------
+        tuple:
+            (smoothed_x, smoothed_y, pdf_values) where:
+            - smoothed_x: x-values for the smoothed function (predicted values)
+            - smoothed_y: y-values for the smoothed function (quantiles)
+            - pdf_values: PDF values corresponding to smoothed_x
+        """
+        # Fit a GAM to smooth the quantile function - disable verbose output
+        gam = LinearGAM(s(0, constraints="monotonic_inc"), verbose=False).fit(quantiles, predictions)
+        
+        # Generate smoothed CDF
+        quantiles_smooth = np.linspace(0, 1, num_points)
+        y_pred_smooth = gam.predict(quantiles_smooth)
+        
+        # Compute PDF (derivative of the quantile function)
+        epsilon = 1e-10  # Small value to avoid division by zero
+        pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
+        pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
+        
+        # Normalize the PDF
+        total_area = np.trapz(pdf_smooth, y_pred_smooth)
+        if total_area > epsilon:
+            pdf_smooth /= total_area
+        
+        return y_pred_smooth, quantiles_smooth, pdf_smooth
+    
+    def _compute_crps(self, y_val, y_val_pred, num_points=1000, verbose=True):
+        """
+        Compute the Continuous Ranked Probability Score (CRPS) for validation data.
+        
+        Parameters:
+        -----------
+        y_val : numpy.ndarray
+            Validation target values.
+        y_val_pred : numpy.ndarray
+            Validation predictions (quantiles) with shape (n_samples, n_quantiles).
+        num_points : int, default=10000
+            Number of points to use for smoothing.
+        verbose : bool, default=True
+            If True, print warning messages for calculation errors.
+            
+        Returns:
+        --------
+        float
+            Mean CRPS value across validation samples.
+        """
+        crps_all = []
+        
+        # Suppress all warnings and stdout/stderr during CRPS computation
+        with warnings.catch_warnings(), SilenceOutput():
+            warnings.simplefilter("ignore")
+            
+            for i in range(len(y_val)):
+                try:
+                    y_sample = y_val[i]
+                    y_pred_sample = y_val_pred[i]
+                    
+                    # Advanced approach with smoothing - compute PDF and use as weights
+                    # Use the helper method to get smoothed values and PDF
+                    y_pred_smooth, _, pdf_smooth = self._smooth_quantile_function(
+                        self.quantiles, y_pred_sample, num_points=num_points
+                    )
+                    
+                    # Use the smoothed prediction points and PDF as weights for CRPS
+                    crps = ps.crps_ensemble(y_sample, y_pred_smooth, weights=pdf_smooth)
+                    crps_all.append(crps)
+                except Exception as e:
+                    if verbose:
+                        print(f"Warning: Error calculating CRPS for sample {i}: {str(e)}")
+                    continue
+        
+        # Filter out NaN and Inf values before computing mean
+        crps_all = np.array(crps_all)
+        valid_crps = crps_all[~np.isnan(crps_all) & ~np.isinf(crps_all)]
+        
+        if len(valid_crps) == 0:
+            if verbose:
+                print("Warning: No valid CRPS values computed!")
+            return 999999.0
+            
+        return np.mean(valid_crps)
+
+    def train(self, X, y, cat_features=None, eval_set=None, use_best_model=False, verbose=True, early_stopping_rounds=None):
         """
         Train the ProbGBT model.
         
@@ -94,10 +225,13 @@ class ProbGBT:
             List of categorical feature indices or names.
         eval_set : tuple, optional
             (X_val, y_val) for validation during training.
-        use_best_model : bool, default=True
-            If True, the best model on the validation set will be used.
+        use_best_model : bool, default=False
+            If True, use the best model found based on the validation set.
+            If False, the model will not be shrunk to the best iteration and will retain all trained iterations.
         verbose : bool, default=True
             If True, print training progress.
+        early_stopping_rounds : int, optional
+            Activates early stopping. Validation score needs to increase for this many rounds.
             
         Returns:
         --------
@@ -128,7 +262,8 @@ class ProbGBT:
                 )
                 
                 # Train the model
-                model.fit(X, y, eval_set=eval_set, use_best_model=use_best_model, verbose=False)
+                model.fit(X, y, eval_set=eval_set, use_best_model=use_best_model, verbose=False,
+                          early_stopping_rounds=early_stopping_rounds)
                 
                 # Add the model to the trained_models dictionary
                 self.trained_models[q] = model
@@ -136,19 +271,44 @@ class ProbGBT:
             # Format quantiles for CatBoost
             multiquantile_loss_str = str(self.quantiles.astype(float)).replace("[", "").replace("]", "").replace("\n", "").replace(" ", ", ")
             
-            # Initialize CatBoost model
-            self.model = CatBoostRegressor(
-                cat_features=cat_features,
-                loss_function=f"MultiQuantile:alpha={multiquantile_loss_str}",
-                iterations=self.iterations,
-                learning_rate=self.learning_rate,
-                depth=self.depth,
-                subsample=self.subsample,
-                random_seed=self.random_seed
+            # Create CatBoost model parameters
+            params = {
+                'cat_features': cat_features,
+                'loss_function': f"MultiQuantile:alpha={multiquantile_loss_str}",
+                'iterations': self.iterations,
+                'learning_rate': self.learning_rate,
+                'depth': self.depth,
+                'subsample': self.subsample,
+                'random_seed': self.random_seed,
+                'verbose': verbose  # Show metrics every iteration
+            }
+            
+            # Standard training - removed custom metrics
+            self.model = CatBoostRegressor(**params)
+            
+            self.model.fit(
+                X, y,
+                eval_set=eval_set,
+                use_best_model=use_best_model,
+                verbose=verbose,  # Set verbose to boolean value
+                early_stopping_rounds=early_stopping_rounds
             )
             
-            # Train the model
-            self.model.fit(X, y, eval_set=eval_set, use_best_model=use_best_model, verbose=verbose)
+            # Display metrics from training
+            if verbose:
+                try:
+                    metrics = self.model.get_evals_result()
+                    print("\nTraining metrics:")
+                    for dataset in metrics:
+                        print(f"Dataset: {dataset}")
+                        for metric_name, values in metrics[dataset].items():
+                            print(f"  {metric_name}: {len(values)} evaluations")
+                            # Show some sample values
+                            if len(values) > 0:
+                                print(f"    First value: {values[0]}")
+                                print(f"    Last value: {values[-1]}")
+                except Exception as e:
+                    print(f"Could not display metrics: {str(e)}")
         
         return self
     
@@ -245,23 +405,25 @@ class ProbGBT:
         lower_bounds = []
         upper_bounds = []
         
-        for i in range(quantile_preds.shape[0]):
-            # Get the predicted quantiles for this sample
-            y_pred_sample = quantile_preds[i]
+        # Suppress all warnings and stdout/stderr during interval computation
+        with warnings.catch_warnings(), SilenceOutput():
+            warnings.simplefilter("ignore")
             
-            # Fit a GAM to smooth the quantile function
-            gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
-            
-            # Generate smoothed CDF
-            quantiles_smooth = np.linspace(0, 1, 1000)
-            y_pred_smooth = gam.predict(quantiles_smooth)
-            
-            # Find the quantile values corresponding to the confidence interval
-            lower_idx = np.searchsorted(quantiles_smooth, (1 - confidence_level) / 2)
-            upper_idx = np.searchsorted(quantiles_smooth, 1 - (1 - confidence_level) / 2)
-            
-            lower_bounds.append(y_pred_smooth[lower_idx])
-            upper_bounds.append(y_pred_smooth[upper_idx])
+            for i in range(quantile_preds.shape[0]):
+                # Get the predicted quantiles for this sample
+                y_pred_sample = quantile_preds[i]
+                
+                # Use the helper method to get smoothed values
+                y_pred_smooth, quantiles_smooth, _ = self._smooth_quantile_function(
+                    self.quantiles, y_pred_sample, num_points=1000
+                )
+                
+                # Find the quantile values corresponding to the confidence interval
+                lower_idx = np.searchsorted(quantiles_smooth, (1 - confidence_level) / 2)
+                upper_idx = np.searchsorted(quantiles_smooth, 1 - (1 - confidence_level) / 2)
+                
+                lower_bounds.append(y_pred_smooth[lower_idx])
+                upper_bounds.append(y_pred_smooth[upper_idx])
         
         return np.array(lower_bounds), np.array(upper_bounds)
     
@@ -294,26 +456,20 @@ class ProbGBT:
         
         results = []
         
-        for i in range(quantile_preds.shape[0]):
-            # Get the predicted quantiles for this sample
-            y_pred_sample = quantile_preds[i]
+        # Suppress all warnings and stdout/stderr during PDF computation
+        with warnings.catch_warnings(), SilenceOutput():
+            warnings.simplefilter("ignore")
             
-            # Fit a GAM to smooth the quantile function
-            gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
-            
-            # Generate smoothed CDF
-            quantiles_smooth = np.linspace(0, 1, num_points)
-            y_pred_smooth = gam.predict(quantiles_smooth)
-            
-            # Compute PDF (derivative of the quantile function)
-            epsilon = 1e-10  # Small value to avoid division by zero
-            pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
-            pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
-            
-            # Normalize the PDF
-            pdf_smooth /= np.trapz(pdf_smooth, y_pred_smooth)
-            
-            results.append((y_pred_smooth, pdf_smooth))
+            for i in range(quantile_preds.shape[0]):
+                # Get the predicted quantiles for this sample
+                y_pred_sample = quantile_preds[i]
+                
+                # Use the helper method to get smoothed values
+                y_pred_smooth, _, pdf_smooth = self._smooth_quantile_function(
+                    self.quantiles, y_pred_sample, num_points=num_points
+                )
+                
+                results.append((y_pred_smooth, pdf_smooth))
         
         return results
     
@@ -357,6 +513,22 @@ class ProbGBT:
         if not self.train_separate_models:
             # Save single model using CatBoost's native method
             self.model.save_model(filepath, format=format)
+            
+            # Save additional metadata
+            metadata_path = f"{filepath}.metadata.json"
+            metadata = {
+                'num_quantiles': self.num_quantiles,
+                'iterations': self.iterations,
+                'learning_rate': self.learning_rate,
+                'depth': self.depth,
+                'subsample': self.subsample,
+                'random_seed': self.random_seed,
+                'train_separate_models': self.train_separate_models,
+                'quantiles': self.quantiles.tolist()
+            }
+            
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f)
         else:
             # Save separate models to a tar.xz file
             # First, create a temporary directory to store models
@@ -370,7 +542,7 @@ class ProbGBT:
                     'subsample': self.subsample,
                     'random_seed': self.random_seed,
                     'train_separate_models': self.train_separate_models,
-                    'quantiles': self.quantiles.tolist(),
+                    'quantiles': self.quantiles.tolist()
                 }
                 
                 with open(os.path.join(temp_dir, 'metadata.json'), 'w') as f:
@@ -415,36 +587,29 @@ class ProbGBT:
     
     def load(self, filepath, format='cbm'):
         """
-        Load a saved ProbGBT model from a file.
+        Load a previously saved ProbGBT model.
         
         Parameters:
         -----------
         filepath : str
             Path to the saved model file.
         format : str, default='cbm'
-            Format of the saved model. Options are:
+            Format of the saved model. Only used for single model approach.
+            Options are:
             'cbm' - CatBoost binary format
             'json' - JSON format
-            This is only used for loading individual models if loading from a tar.xz archive.
             
         Returns:
         --------
         self : object
             Returns self.
         """
+        # Check if the file is a tar.xz archive (separate models approach)
         if filepath.endswith('.tar.xz'):
-            # Load from tar.xz (separate models approach)
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Extract the tar.xz file with progress bar
-                file_size = os.path.getsize(filepath)
-                
-                print(f"Extracting archive {filepath}...")
-                with tqdm(total=file_size, unit='B', unit_scale=True, desc="Extracting") as pbar:
-                    with tarfile.open(filepath, mode='r:xz') as tar:
-                        members = tar.getmembers()
-                        for member in members:
-                            tar.extract(member, path=temp_dir)
-                            pbar.update(file_size // len(members))  # Approximate progress
+                # Extract the archive
+                with tarfile.open(filepath, 'r:xz') as tar:
+                    tar.extractall(path=temp_dir)
                 
                 # Load metadata
                 with open(os.path.join(temp_dir, 'metadata.json'), 'r') as f:
@@ -490,24 +655,107 @@ class ProbGBT:
                 
                 # Ensure quantiles are in the correct order
                 self.quantiles = np.array(sorted(self.trained_models.keys()))
-                
         else:
-            # Load single model using CatBoost's native method
-            self.train_separate_models = False
+            # Load single model
             self.model = CatBoostRegressor()
             self.model.load_model(filepath, format=format)
             
-            # Try to extract quantiles from the model parameters
-            loss_function = self.model.get_param('loss_function')
-            if loss_function and 'MultiQuantile:alpha=' in loss_function:
-                quantiles_str = loss_function.split('MultiQuantile:alpha=')[1]
-                try:
-                    self.quantiles = np.array([float(q.strip()) for q in quantiles_str.split(',')])
-                except:
-                    # If we can't parse the quantiles, create default ones
-                    self.quantiles = self._generate_non_uniform_quantiles()
+            # Load metadata if it exists
+            metadata_path = f"{filepath}.metadata.json"
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                
+                # Set model parameters from metadata
+                self.num_quantiles = metadata['num_quantiles']
+                self.iterations = metadata['iterations']
+                self.learning_rate = metadata['learning_rate']
+                self.depth = metadata['depth']
+                self.subsample = metadata['subsample']
+                self.random_seed = metadata['random_seed']
+                self.train_separate_models = metadata['train_separate_models']
+                self.quantiles = np.array(metadata['quantiles'])
             else:
-                # If we can't extract quantiles from the model, generate default ones
-                self.quantiles = self._generate_non_uniform_quantiles()
+                # If metadata file doesn't exist, infer quantiles from model
+                self.train_separate_models = False
+                
+                # Set default parameters
+                self.num_quantiles = 0  # Will be updated based on model
+                self.iterations = 0  # Unknown
+                self.learning_rate = None
+                self.depth = None
+                self.subsample = 1.0
+                self.random_seed = 42
+                
+                # Try to extract quantiles from model
+                try:
+                    # Get loss function string from model
+                    loss_function = self.model.get_param('loss_function')
+                    
+                    # Extract quantiles if it's a MultiQuantile loss function
+                    if loss_function.startswith('MultiQuantile:alpha='):
+                        alpha_str = loss_function.replace('MultiQuantile:alpha=', '')
+                        self.quantiles = np.array([float(a.strip()) for a in alpha_str.split(',')])
+                        self.num_quantiles = len(self.quantiles)
+                    else:
+                        # Default quantiles for backward compatibility
+                        self.quantiles = np.linspace(0.01, 0.99, 50)
+                        self.num_quantiles = 50
+                except:
+                    # Default quantiles for backward compatibility
+                    self.quantiles = np.linspace(0.01, 0.99, 50)
+                    self.num_quantiles = 50
         
-        return self 
+        return self
+
+    def evaluate_crps(self, X, y, subset_fraction=1.0, num_points=1000, verbose=True):
+        """
+        Evaluate the model using CRPS on test data.
+        
+        This method works for both individual and separate models.
+        
+        Parameters:
+        -----------
+        X : pandas.DataFrame or numpy.ndarray
+            Test features.
+        y : numpy.ndarray
+            Test target values.
+        subset_fraction : float, default=1.0
+            Fraction of test data to use for evaluation (0.0-1.0).
+        num_points : int, default=1000
+            Number of points to use for smoothing the PDF.
+        verbose : bool, default=True
+            If True, print progress information.
+            
+        Returns:
+        --------
+        float
+            Mean CRPS value across test samples.
+        """
+        if self.train_separate_models and not self.trained_models:
+            raise ValueError("Models have not been trained yet. Call train() first.")
+        elif not self.train_separate_models and self.model is None:
+            raise ValueError("Model has not been trained yet. Call train() first.")
+        
+        # Sample test data if subset_fraction < 1.0
+        if 0.0 < subset_fraction < 1.0:
+            test_size = int(len(X) * subset_fraction)
+            idx = np.random.choice(len(X), test_size, replace=False)
+            X_subset = X.iloc[idx] if isinstance(X, pd.DataFrame) else X[idx]
+            y_subset = y[idx]
+        else:
+            X_subset, y_subset = X, y
+        
+        if verbose:
+            print(f"Evaluating CRPS on {len(X_subset)} test samples...")
+        
+        # Get quantile predictions
+        y_pred = self.predict(X_subset, return_quantiles=True)
+        
+        # Calculate CRPS
+        crps = self._compute_crps(y_subset, y_pred, num_points=num_points, verbose=verbose)
+        
+        if verbose:
+            print(f"Test CRPS = {crps:.6f}")
+        
+        return crps 

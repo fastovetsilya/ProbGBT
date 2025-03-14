@@ -6,3 +6,4 @@ scikit-learn>=1.0.0
 pygam>=0.8.0,<=0.9.1
 matplotlib>=3.5.0
 tqdm>=4.60.0 
+properscoring>=0.1

@@ -9,6 +9,7 @@ ProbGBT is a probabilistic machine learning model that extends gradient boosted 
 - **Flexible**: Works with both numerical and categorical features
 - **Efficient**: Built on top of CatBoost's fast gradient boosting implementation
 - **Multiple Training Strategies**: Supports both single model with MultiQuantile loss and separate models for each quantile
+- **CRPS Validation**: Supports Continuous Ranked Probability Score (CRPS) for model validation and early stopping
 
 ## Example Visualizations
 
@@ -102,26 +103,58 @@ lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.9
 
 # Get full probability distributions
 pdfs = model.predict_pdf(X_test)
+
+# Evaluate CRPS on test data
+crps = model.evaluate_crps(X_test, y_test)
 ```
 
-### Example Script
+### Training with CRPS Validation
 
-The repository includes an example script that demonstrates how to use ProbGBT with the California housing prices dataset:
+The Continuous Ranked Probability Score (CRPS) is a proper scoring rule that measures the quality of probabilistic forecasts. It's particularly well-suited for evaluating probabilistic regression models.
+
+```python
+# Initialize model with CRPS validation
+model = ProbGBT(
+    num_quantiles=50, 
+    iterations=500,
+    train_separate_models=False,
+    use_crps=True,              # Enable CRPS validation during training
+    crps_eval_freq=10,          # Evaluate CRPS every 10 iterations
+    crps_val_subset=0.5         # Use 50% of validation data for CRPS calculation
+)
+
+# Train with CRPS early stopping
+model.train(
+    X_train, 
+    y_train,
+    cat_features=cat_features,
+    eval_set=(X_val, y_val),    # Validation data is required for CRPS
+    early_stopping_rounds=30,   # Stop training if no improvement for 30 iterations
+    crps_early_stopping=True    # Use CRPS for early stopping instead of default metric
+)
+
+# Get CRPS history during training
+crps_history = model.get_crps_history()
+```
+
+### Example CRPS Script
+
+The repository includes an example script demonstrating CRPS usage:
 
 ```bash
 # Using Python directly
-python run_example.py
+python -m prob_gbt.example_crps
 
 # Using Poetry
-poetry run run-example
+poetry run python -m prob_gbt.example_crps
 ```
 
 This will:
-1. Load the California housing prices dataset
-2. Train a ProbGBT model
-3. Make predictions with uncertainty estimates
-4. Calculate performance metrics
-5. Generate visualizations in the 'images' directory
+1. Train a model with CRPS validation
+2. Train a model with CRPS early stopping
+3. Compare different models using RMSE and CRPS metrics
+4. Plot CRPS evolution during training
+5. Save the best model based on CRPS
 
 ## How It Works
 
@@ -186,7 +219,10 @@ ProbGBT(
     depth=None,
     subsample=1.0,
     random_seed=42,
-    train_separate_models=False
+    train_separate_models=False,
+    use_crps=False,
+    crps_eval_freq=10,
+    crps_val_subset=1.0
 )
 ```
 
@@ -199,54 +235,47 @@ ProbGBT(
 - `subsample`: Subsample ratio of the training instances (default: 1.0)
 - `random_seed`: Random seed for reproducibility (default: 42)
 - `train_separate_models`: If True, train separate models for each quantile instead of using MultiQuantile loss (default: False)
+- `use_crps`: If True, compute CRPS during training (default: False). Only available when train_separate_models=False and eval_set is provided.
+- `crps_eval_freq`: Frequency (in epochs) to evaluate CRPS during training (default: 10)
+- `crps_val_subset`: Fraction of validation data to use for CRPS calculation (default: 1.0). Lower values speed up computation.
 
 #### Methods:
 
-- `train(X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True)`: Train the model
+- `train(X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True, early_stopping_rounds=None, crps_early_stopping=False)`: Train the model
 - `predict(X, return_quantiles=False)`: Make predictions
 - `predict_interval(X, confidence_level=0.95)`: Predict confidence intervals
 - `predict_pdf(X, num_points=1000)`: Predict probability density functions
+- `evaluate_crps(X, y, subset_fraction=1.0, num_points=1000, verbose=True)`: Evaluate CRPS on test data
+- `get_crps_history()`: Get history of CRPS values during training
 - `save(filepath, format='cbm', compression_level=6)`: Save the trained model to a file
 - `load(filepath, format='cbm')`: Load a saved model from a file
 
-### Save and Load Functionality
+### CRPS Evaluation
 
-ProbGBT models can be saved to disk and loaded later for inference:
-
-```python
-# Save a trained model
-model.save("model.cbm")  # For single model approach
-model.save("models.tar.xz")  # For separate models approach
-
-# Load a model
-loaded_model = ProbGBT()
-loaded_model.load("model.cbm")  # Load single model
-loaded_model.load("models.tar.xz")  # Load separate models
-```
-
-#### Save Method
+The CRPS (Continuous Ranked Probability Score) is a proper scoring rule that measures the quality of probabilistic forecasts. A lower CRPS value indicates better probabilistic predictions.
 
 ```python
-save(filepath, format='cbm', compression_level=6)
+# Evaluate CRPS on test data
+crps = model.evaluate_crps(
+    X_test, 
+    y_test, 
+    subset_fraction=1.0,  # Use all test data
+    num_points=1000,      # Number of points for PDF smoothing
+    verbose=True          # Print progress information
+)
 ```
 
-- `filepath`: Path to save the model. For separate models, use a `.tar.xz` extension.
-- `format`: Format for saving individual models. Options: 'cbm' (CatBoost binary), 'json'
-- `compression_level`: Compression level for xz compression (1-9, where 9 is highest). Only used with separate models.
+#### Benefits of CRPS:
 
-For the single model approach (when `train_separate_models=False`), this uses CatBoost's native `save_model` method.
-For the separate models approach (when `train_separate_models=True`), this saves each model separately and compresses them into a tar.xz file with progress bars for monitoring.
+1. **Proper Scoring Rule**: CRPS is a proper scoring rule, meaning it encourages truthful forecasts.
+2. **Distribution Awareness**: Unlike RMSE, CRPS evaluates the entire predicted distribution, not just point estimates.
+3. **Calibration Sensitivity**: CRPS is sensitive to both calibration (whether confidence intervals have proper coverage) and sharpness (how narrow the predictions are).
+4. **No Parametric Assumptions**: Works with any distribution shape, not just normal distributions.
+5. **Interpretable Units**: CRPS is in the same units as the target variable, making it directly interpretable.
 
-#### Load Method
+#### Technical Implementation:
 
-```python
-load(filepath, format='cbm')
-```
-
-- `filepath`: Path to the saved model file.
-- `format`: Format of the saved model. Only used for loading individual models from a tar.xz archive.
-
-The method automatically detects whether the file is a single model or an archive of separate models based on the file extension.
+The CRPS implementation fits a GAM to smooth the quantile function, computes the PDF from it, and uses properscoring's `crps_ensemble` function to calculate the final score.
 
 ## License
 

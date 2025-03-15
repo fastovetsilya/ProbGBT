@@ -28,10 +28,7 @@ def main():
     print("Applying log transformation to house prices...")
     y = np.log1p(y_raw)  # log1p is log(1+x) which handles zero values gracefully
     
-    # Convert 'ocean_proximity' to categorical codes
-    X['ocean_proximity'] = X['ocean_proximity'].astype('category').cat.codes.astype(int)  # Ensure integer type
-    
-    # Define categorical features
+    # Define categorical features - no need to convert to codes, CatBoost handles text categories
     cat_features = ['ocean_proximity']
 
     # Split the data into train, validation, and test sets
@@ -55,13 +52,6 @@ def main():
     X_train = X_train_idx.drop('original_index', axis=1)
     X_val = X_val_idx.drop('original_index', axis=1)
     X_test = X_test_idx.drop('original_index', axis=1)
-    
-    # Verify categorical feature is still integer type
-    if X_train['ocean_proximity'].dtype != 'int64' and X_train['ocean_proximity'].dtype != 'int32':
-        print("Warning: Converting ocean_proximity back to int type")
-        X_train['ocean_proximity'] = X_train['ocean_proximity'].astype(int)
-        X_val['ocean_proximity'] = X_val['ocean_proximity'].astype(int)
-        X_test['ocean_proximity'] = X_test['ocean_proximity'].astype(int)
     
     # Get the corresponding raw target values
     y_raw_train = y_raw[train_indices]

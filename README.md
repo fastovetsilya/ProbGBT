@@ -102,6 +102,10 @@ lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.9
 
 # Get full probability distributions
 pdfs = model.predict_pdf(X_test)
+
+# Using GMM smoothing for more robust distributions (for multi-modal data)
+lower_gmm, upper_gmm = model.predict_interval(X_test, confidence_level=0.95, method='gmm')
+pdfs_gmm = model.predict_pdf(X_test, method='gmm')
 ```
 
 ### Example Script
@@ -172,6 +176,18 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
      ```
    - This uses the trapezoidal rule for numerical integration
 
+6. **Gaussian Mixture Model (GMM) Smoothing**:
+   - In addition to spline-based smoothing, ProbGBT offers an optional GMM-based smoothing method
+   - GMM fits a mixture of Gaussian distributions to the data, providing a more robust representation for complex distributions
+   - This can be enabled by setting `method='gmm'` in the `predict_pdf()` or `predict_interval()` functions:
+     ```python
+     pdfs = model.predict_pdf(X_test, method='gmm')
+     lower, upper = model.predict_interval(X_test, confidence_level=0.95, method='gmm')
+     ```
+   - GMM smoothing can better capture multi-modal distributions and provides smoother estimates
+   - The implementation uses scikit-learn's GaussianMixture with 3 components by default
+   - The model includes sophisticated failure detection to fall back to spline smoothing when GMM fails to converge or produces unreliable distributions
+
 This approach allows ProbGBT to generate flexible, non-parametric probability distributions that can capture complex uncertainty patterns in the data, including multi-modal distributions, skewness, and heteroscedasticity.
 
 ## API Reference
@@ -204,8 +220,8 @@ ProbGBT(
 
 - `train(X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True)`: Train the model
 - `predict(X, return_quantiles=False)`: Make predictions
-- `predict_interval(X, confidence_level=0.95)`: Predict confidence intervals
-- `predict_pdf(X, num_points=1000)`: Predict probability density functions
+- `predict_interval(X, confidence_level=0.95, method='spline', num_points=1000)`: Predict confidence intervals
+- `predict_pdf(X, num_points=1000, method='spline')`: Predict probability density functions
 - `save(filepath, format='cbm', compression_level=6)`: Save the trained model to a file
 - `load(filepath, format='cbm')`: Load a saved model from a file
 

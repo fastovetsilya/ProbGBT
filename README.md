@@ -267,7 +267,3 @@ The method automatically detects whether the file is a single model or an archiv
 ## License
 
 MIT
-
-## Acknowledgements
-
-This implementation is based on the concepts of quantile regression and uncertainty estimation in gradient boosted trees.

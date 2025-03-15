@@ -5,9 +5,7 @@ import os
 import sys
 from sklearn.model_selection import train_test_split
 from matplotlib.gridspec import GridSpec
-from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
-
 # Use relative imports for the package
 from .prob_gbt import ProbGBT
 
@@ -44,7 +42,7 @@ def main():
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=100,
-        iterations=3000, # If not calibrated, use less iterations to reduce overfitting
+        iterations=1000, # If not calibrated, use less iterations to reduce overfitting
         subsample=1.0,
         random_seed=1234,
         calibrate=True, # Enable conformal calibration (uses some of the training data to calibrate the model), 
@@ -68,9 +66,12 @@ def main():
     print("\nMaking predictions...")
     y_pred = model.predict(X_test)
 
-    # Calculate RMSE
+    # Calculate RMSE and MAE for the point predictions
     rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
+    mae = np.mean(np.abs(y_test - y_pred))
+    print(f"Point predictions from PDF median:")
     print(f"Root Mean Squared Error (RMSE): {rmse:.2f}")
+    print(f"Mean Absolute Error (MAE): {mae:.2f}")
 
     # Predict confidence intervals
     print("\nPredicting confidence intervals...")
@@ -136,19 +137,27 @@ def main():
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
-    # Second pass to plot without y-axis limit adjustments
+    # Plot each distribution separately with correct data
     for i, idx in enumerate(diverse_indices):
-        pdfs = model.predict_pdf(X_test.iloc[[idx]], method=smoothing_method)
+        # Get PDF for this specific sample
+        sample_pdfs = model.predict_pdf(X_test.iloc[[idx]], method=smoothing_method)
+        x_vals, pdf_vals = sample_pdfs[0]
         
-        axes[i].plot(x_values, pdf_values, label='PDF')
+        # Get prediction (median) for this sample
+        pred_val = y_pred[idx]
+        
+        # Plot the distribution and vertical lines
+        axes[i].plot(x_vals, pdf_vals, label='PDF')
         axes[i].axvline(x=y_test[idx], color='r', linestyle='--', label='Actual')
-        axes[i].axvline(x=y_pred[idx], color='g', linestyle='--', label='Predicted')
-        axes[i].fill_between(x_values, pdf_values, 
-                           where=(x_values >= lower_bounds[idx]) & (x_values <= upper_bounds[idx]), 
+        axes[i].axvline(x=pred_val, color='g', linestyle='--', label='Predicted')
+        
+        # Fill the 95% confidence interval
+        axes[i].fill_between(x_vals, pdf_vals, 
+                           where=(x_vals >= lower_bounds[idx]) & (x_vals <= upper_bounds[idx]), 
                            alpha=0.3, color='blue', label='95% CI')
         
         # Set y-axis limit to 1e-4 if there are values higher than that
-        y_max = np.max(pdf_values)
+        y_max = np.max(pdf_vals)
         if y_max > 1e-4:
             axes[i].set_ylim(0, 1e-4)
         
@@ -158,6 +167,7 @@ def main():
         if i == 0:
             axes[i].set_ylabel('Probability Density')
         axes[i].grid(True)
+        axes[i].legend()
     
     plt.tight_layout()
     plt.savefig('./images/multiple_pdfs.png', dpi=300, bbox_inches='tight')
@@ -166,6 +176,20 @@ def main():
     # 2. Confidence interval width vs. prediction error
     print("\nPlotting confidence interval width vs. prediction error...")
     ci_widths = upper_bounds - lower_bounds
+    
+    # Check for any invalid (negative) confidence interval widths
+    invalid_indices = np.where(ci_widths < 0)[0]
+    if len(invalid_indices) > 0:
+        print(f"WARNING: Found {len(invalid_indices)} samples with negative confidence interval widths!")
+        for idx in invalid_indices:
+            print(f"Sample {idx}: Lower bound ({lower_bounds[idx]:.2f}) > Upper bound ({upper_bounds[idx]:.2f})")
+            print(f"  Actual value: {y_test[idx]:.2f}, Predicted value: {y_pred[idx]:.2f}")
+            # Fix by swapping lower and upper bounds for this sample
+            lower_bounds[idx], upper_bounds[idx] = upper_bounds[idx], lower_bounds[idx]
+        
+        # Recalculate widths after fixing
+        ci_widths = upper_bounds - lower_bounds
+    
     prediction_errors = np.abs(y_test - y_pred)
     
     plt.figure(figsize=(10, 6))

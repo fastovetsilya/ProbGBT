@@ -6,13 +6,14 @@ setup(
     packages=find_packages(),
     install_requires=[
         "numpy==1.22.4",
-        "pandas>=2.2.0",
-        "catboost>=1.2.0",
-        "scipy>=1.10.0",
-        "scikit-learn>=1.0.0",
+        "pandas>=2.2.2",
+        "catboost>=1.2.3",
+        "scikit-learn>=1.6.1",
+        "tqdm>=4.67.1",
         "pygam>=0.8.0,<=0.9.1",
-        "matplotlib>=3.5.0",
-        "tqdm>=4.60.0",
+        "properscoring>=0.1",
+        "matplotlib>=3.8.3",
+        "scipy>=1.10.0",
     ],
     entry_points={
         'console_scripts': [

@@ -265,52 +265,26 @@ class ProbGBT:
     
     def predict(self, X, return_quantiles=False):
         """
-        Make predictions with the trained model.
+        Predict the target values for the given samples.
         
         Parameters:
         -----------
         X : pandas.DataFrame or numpy.ndarray
             Features to predict on.
         return_quantiles : bool, default=False
-            If True, return the raw quantile predictions.
+            Whether to return the predictions for all quantiles.
             
         Returns:
         --------
-        If return_quantiles=True:
-            numpy.ndarray: Raw quantile predictions with shape (n_samples, n_quantiles)
-        If return_quantiles=False:
-            numpy.ndarray: Mean predictions with shape (n_samples,)
+        numpy.ndarray: Predictions for the samples.
         """
         if self.train_separate_models and not self.trained_models:
             raise ValueError("Models have not been trained yet. Call train() first.")
         elif not self.train_separate_models and self.model is None:
             raise ValueError("Model has not been trained yet. Call train() first.")
         
-        # Get raw quantile predictions
-        if self.train_separate_models:
-            # Convert X to DataFrame if it's not already
-            if not isinstance(X, pd.DataFrame):
-                if len(X.shape) == 1:
-                    X = pd.DataFrame([X])
-                else:
-                    X = pd.DataFrame(X)
-            
-            # Get predictions for each quantile
-            quantile_preds = []
-            # Add tqdm progress bar
-            for i in tqdm(range(len(X)), desc="Making predictions"):
-                sample_preds = []
-                # Create a single-row DataFrame for this sample to preserve categorical features
-                sample_df = X.iloc[[i]]
-                
-                for q in self.quantiles:
-                    # Predict using the DataFrame directly instead of reshaping to numpy array
-                    sample_preds.append(self.trained_models[q].predict(sample_df)[0])
-                quantile_preds.append(sample_preds)
-            quantile_preds = np.array(quantile_preds)
-        else:
-            # Get quantile predictions from the single model
-            quantile_preds = self.model.predict(X)
+        # Get raw, uncalibrated quantile predictions from the model
+        quantile_preds = self._get_uncalibrated_predictions(X)
         
         # Apply calibration if enabled and model is calibrated
         if self.calibrate and self.is_calibrated:
@@ -349,17 +323,34 @@ class ProbGBT:
         if return_quantiles:
             return quantile_preds
         
-        # Return mean prediction (median)
+        # OPTION 1: Simple direct quantile approach (original method)
+        # Return direct 0.5 quantile prediction
         median_idx = np.searchsorted(self.quantiles, 0.5)
         if median_idx >= len(self.quantiles):
             median_idx = len(self.quantiles) - 1
         
-        # If quantile_preds is 2D, extract the median for each sample
-        if len(quantile_preds.shape) > 1:
-            return quantile_preds[:, median_idx]
-        else:
-            # For a single sample
-            return quantile_preds[median_idx]
+        # For consistency with the PDF shown in visualizations, we should use
+        # the median from the smoothed distribution, not the direct 0.5 quantile
+        
+        # OPTION 2: Calculate true median from smoothed PDF for each sample (more accurate)
+        # This ensures the prediction matches the median of the distribution shown in visualizations
+        medians = []
+        method = 'spline'  # Use the same method as in visualizations
+        num_points = 1000
+        
+        for i in tqdm(range(quantile_preds.shape[0]), desc="Calculating medians"):
+            # Get smoothed PDF and CDF
+            x_values, pdf_values, cdf_values, _ = self._get_smoothed_pdf(
+                quantile_preds, i, num_points=num_points, method=method
+            )
+            
+            # Find the median (point where CDF crosses 0.5)
+            median_idx = np.searchsorted(cdf_values, 0.5, side='left')
+            median_idx = max(0, min(median_idx, len(x_values) - 1))
+            median = x_values[median_idx]
+            medians.append(median)
+        
+        return np.array(medians)
     
     def _get_smoothed_pdf(self, quantile_preds, i, num_points=1000, method='spline'):
         """
@@ -617,6 +608,22 @@ class ProbGBT:
             # Store PDFs as a class attribute for later access
             self._last_pdfs = pdfs
             
+            # Ensure lower bounds are always less than upper bounds
+            lower_bounds = np.array(lower_bounds)
+            upper_bounds = np.array(upper_bounds)
+            
+            # Find cases where bounds are reversed
+            swap_indices = np.where(lower_bounds > upper_bounds)[0]
+            if len(swap_indices) > 0:
+                # Swap the values where needed
+                temp = lower_bounds[swap_indices].copy()
+                lower_bounds[swap_indices] = upper_bounds[swap_indices]
+                upper_bounds[swap_indices] = temp
+                
+                # Log warning if bounds were swapped
+                if len(swap_indices) > 0:
+                    print(f"Warning: Swapped {len(swap_indices)} lower/upper bounds where lower > upper.")
+            
             return lower_bounds, upper_bounds
         
         # If not calibrated, use smoothed approach
@@ -653,7 +660,23 @@ class ProbGBT:
         # Store PDFs as a class attribute for later access
         self._last_pdfs = pdfs
         
-        return np.array(lower_bounds), np.array(upper_bounds)
+        # Ensure lower bounds are always less than upper bounds
+        lower_bounds = np.array(lower_bounds)
+        upper_bounds = np.array(upper_bounds)
+        
+        # Find cases where bounds are reversed
+        swap_indices = np.where(lower_bounds > upper_bounds)[0]
+        if len(swap_indices) > 0:
+            # Swap the values where needed
+            temp = lower_bounds[swap_indices].copy()
+            lower_bounds[swap_indices] = upper_bounds[swap_indices]
+            upper_bounds[swap_indices] = temp
+            
+            # Log warning if bounds were swapped
+            if len(swap_indices) > 0:
+                print(f"Warning: Swapped {len(swap_indices)} lower/upper bounds where lower > upper.")
+        
+        return lower_bounds, upper_bounds
     
     def _get_uncalibrated_predictions(self, X):
         """

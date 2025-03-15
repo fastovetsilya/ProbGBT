@@ -44,7 +44,7 @@ def main():
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=100,
-        iterations=300,
+        iterations=250,
         subsample=1.0,
         random_seed=1234,
         train_separate_models=False

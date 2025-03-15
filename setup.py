@@ -14,6 +14,9 @@ setup(
         "properscoring>=0.1",
         "matplotlib>=3.8.3",
         "scipy>=1.10.0",
+        "geopandas>=1.0.1",
+        "contextily>=1.6.2",
+        "shapely>=2.0.3",
     ],
     entry_points={
         'console_scripts': [

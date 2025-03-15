@@ -33,8 +33,8 @@ def main():
     cat_features = ['ocean_proximity']
 
     # Split the data into train, validation, and test sets
-    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
-    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=1234)
+    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=1234)
 
     print(f"Training set: {X_train.shape[0]} samples")
     print(f"Validation set: {X_val.shape[0]} samples")
@@ -43,10 +43,10 @@ def main():
     # Initialize and train the ProbGBT model
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
-        num_quantiles=50,
-        iterations=200,
+        num_quantiles=100,
+        iterations=300,
         subsample=1.0,
-        random_seed=42,
+        random_seed=1234,
         train_separate_models=False
     )
 
@@ -69,7 +69,7 @@ def main():
 
     # Predict confidence intervals
     print("\nPredicting confidence intervals...")
-    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95, method='gmm')
+    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95, method='spline')
     
     # Plot predictions vs actual for a subset of test samples
     print("\nPlotting predictions vs actual values...")
@@ -94,7 +94,7 @@ def main():
     # Plot PDF for a single example
     print("\nPlotting probability density function for a single example...")
     sample_idx = sample_indices[0]
-    pdfs = model.predict_pdf(X_test.iloc[[sample_idx]], method='gmm')
+    pdfs = model.predict_pdf(X_test.iloc[[sample_idx]], method='spline')
     x_values, pdf_values = pdfs[0]
 
     plt.figure(figsize=(10, 6))
@@ -133,7 +133,7 @@ def main():
     
     # Second pass to plot without y-axis limit adjustments
     for i, idx in enumerate(diverse_indices):
-        pdfs = model.predict_pdf(X_test.iloc[[idx]], method='gmm')
+        pdfs = model.predict_pdf(X_test.iloc[[idx]], method='spline')
         x_values, pdf_values = pdfs[0]
         
         axes[i].plot(x_values, pdf_values, label='PDF')
@@ -257,7 +257,7 @@ def main():
     print("Calculating coverage for different confidence levels...")
     for conf_level in tqdm(confidence_levels, desc="Evaluating confidence levels"):
         # Get interval bounds for this confidence level using the same method
-        lower, upper = model.predict_interval(X_test, confidence_level=conf_level, method='gmm')
+        lower, upper = model.predict_interval(X_test, confidence_level=conf_level, method='spline')
         
         # Calculate coverage
         coverage = np.mean((y_test >= lower) & (y_test <= upper))

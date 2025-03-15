@@ -21,7 +21,7 @@ class ProbGBT:
     """
     
     def __init__(self, 
-                 num_quantiles=50, 
+                 num_quantiles=100, 
                  iterations=500,
                  learning_rate=None, 
                  depth=None,

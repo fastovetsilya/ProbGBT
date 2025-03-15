@@ -22,31 +22,66 @@ def main():
     
     # Split the data into features and target
     X = housing_df.drop('median_house_value', axis=1)
-    y = np.array(housing_df['median_house_value'])
+    y_raw = np.array(housing_df['median_house_value'])
+    
+    # Apply log transformation to the target variable to ensure positive predictions
+    print("Applying log transformation to house prices...")
+    y = np.log1p(y_raw)  # log1p is log(1+x) which handles zero values gracefully
     
     # Convert 'ocean_proximity' to categorical codes
-    X['ocean_proximity'] = X['ocean_proximity'].astype('category').cat.codes
+    X['ocean_proximity'] = X['ocean_proximity'].astype('category').cat.codes.astype(int)  # Ensure integer type
     
     # Define categorical features
     cat_features = ['ocean_proximity']
 
     # Split the data into train, validation, and test sets
-    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=1234)
-    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=1234)
+    # Add index as a column to track samples (preserves data types)
+    X = X.reset_index(drop=True)  # Reset index to ensure it starts from 0
+    X_index = X.copy()
+    X_index['original_index'] = X_index.index
+    
+    # Split data with indices
+    X_train_idx, X_temp_idx, y_train, y_temp = train_test_split(
+        X_index, y, test_size=0.3, random_state=1234)
+    X_val_idx, X_test_idx, y_val, y_test = train_test_split(
+        X_temp_idx, y_temp, test_size=0.5, random_state=1234)
+    
+    # Extract indices
+    train_indices = X_train_idx['original_index'].values
+    val_indices = X_val_idx['original_index'].values
+    test_indices = X_test_idx['original_index'].values
+    
+    # Remove index column
+    X_train = X_train_idx.drop('original_index', axis=1)
+    X_val = X_val_idx.drop('original_index', axis=1)
+    X_test = X_test_idx.drop('original_index', axis=1)
+    
+    # Verify categorical feature is still integer type
+    if X_train['ocean_proximity'].dtype != 'int64' and X_train['ocean_proximity'].dtype != 'int32':
+        print("Warning: Converting ocean_proximity back to int type")
+        X_train['ocean_proximity'] = X_train['ocean_proximity'].astype(int)
+        X_val['ocean_proximity'] = X_val['ocean_proximity'].astype(int)
+        X_test['ocean_proximity'] = X_test['ocean_proximity'].astype(int)
+    
+    # Get the corresponding raw target values
+    y_raw_train = y_raw[train_indices]
+    y_raw_val = y_raw[val_indices]
+    y_raw_test = y_raw[test_indices]
 
     print(f"Training set: {X_train.shape[0]} samples")
     print(f"Validation set: {X_val.shape[0]} samples")
     print(f"Test set: {X_test.shape[0]} samples")
+    print(f"Categorical feature types: {X_train[cat_features].dtypes.to_dict()}")
 
     # Initialize and train the ProbGBT model
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=100,
-        iterations=1000, # If not calibrated, use less iterations to reduce overfitting
+        iterations=1000,
         subsample=1.0,
         random_seed=1234,
-        calibrate=True, # Enable conformal calibration (uses some of the training data to calibrate the model), 
-        train_separate_models=False # Train a single model for all quantiles
+        calibrate=True, 
+        train_separate_models=False
     )
 
     model.train(
@@ -54,44 +89,51 @@ def main():
         y_train, 
         cat_features=cat_features, 
         eval_set=(X_val, y_val), 
-        calibration_set=None, # Automatically use 20% of training data for calibration
+        calibration_set=None, 
         use_best_model=True, 
         verbose=True
     )
 
-    # Make predictions
-    # Define smoothing method
-    smoothing_method = 'gmm' # Use GMM smoothing on top of spline for better curves (spline by default)
+    # Define smoothing method for all predictions
+    smoothing_method = 'gmm'  # Use GMM smoothing on top of spline for better curves
 
+    # Make predictions in log space
     print("\nMaking predictions...")
-    y_pred = model.predict(X_test)
-
-    # Calculate RMSE and MAE for the point predictions
-    rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
-    mae = np.mean(np.abs(y_test - y_pred))
-    print(f"Point predictions from PDF median:")
+    y_pred_log = model.predict(X_test)
+    
+    # Convert predictions back to original scale
+    y_pred = np.expm1(y_pred_log)
+    
+    # Calculate RMSE and MAE for the point predictions on original scale
+    rmse = np.sqrt(np.mean((y_raw_test - y_pred) ** 2))
+    mae = np.mean(np.abs(y_raw_test - y_pred))
+    print(f"Point predictions from PDF median (back-transformed):")
     print(f"Root Mean Squared Error (RMSE): {rmse:.2f}")
     print(f"Mean Absolute Error (MAE): {mae:.2f}")
 
-    # Predict confidence intervals
+    # Predict confidence intervals in log space
     print("\nPredicting confidence intervals...")
-    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95, method=smoothing_method)
+    lower_bounds_log, upper_bounds_log = model.predict_interval(X_test, confidence_level=0.95, method=smoothing_method)
+    
+    # Transform bounds back to original scale
+    lower_bounds = np.expm1(lower_bounds_log)
+    upper_bounds = np.expm1(upper_bounds_log)
     
     # Plot predictions vs actual for a subset of test samples
     print("\nPlotting predictions vs actual values...")
-    sample_indices = np.random.choice(len(y_test), size=10, replace=False)
+    sample_indices = np.random.choice(len(y_raw_test), size=10, replace=False)
 
     plt.figure(figsize=(12, 8))
-    plt.scatter(y_test, y_pred, alpha=0.5, label='All predictions')
-    plt.scatter(y_test[sample_indices], y_pred[sample_indices], color='red', label='Selected samples')
+    plt.scatter(y_raw_test, y_pred, alpha=0.5, label='All predictions')
+    plt.scatter(y_raw_test[sample_indices], y_pred[sample_indices], color='red', label='Selected samples')
 
     for i in sample_indices:
-        plt.plot([y_test[i], y_test[i]], [lower_bounds[i], upper_bounds[i]], 'r-', alpha=0.7)
+        plt.plot([y_raw_test[i], y_raw_test[i]], [lower_bounds[i], upper_bounds[i]], 'r-', alpha=0.7)
 
     plt.xlabel('Actual House Price')
     plt.ylabel('Predicted House Price')
     plt.title('ProbGBT: Predicted vs Actual California House Prices with 95% Confidence Intervals')
-    plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'k--', label='Perfect prediction')
+    plt.plot([y_raw_test.min(), y_raw_test.max()], [y_raw_test.min(), y_raw_test.max()], 'k--', label='Perfect prediction')
     plt.legend()
     plt.grid(True)
     plt.savefig('./images/predictions_vs_actual.png', dpi=300, bbox_inches='tight')
@@ -100,20 +142,31 @@ def main():
     # Plot PDF for a single example
     print("\nPlotting probability density function for a single example...")
     sample_idx = sample_indices[0]
-    pdfs = model.predict_pdf(X_test.iloc[[sample_idx]], method=smoothing_method)
-    x_values, pdf_values = pdfs[0]
-
+    
+    pdfs_log = model.predict_pdf(X_test.iloc[[sample_idx]], method=smoothing_method)
+    x_values_log, pdf_values_log = pdfs_log[0]
+    
+    # Transform x-values back to original scale
+    x_values = np.expm1(x_values_log)
+    
+    # The PDF transformation formula is:
+    # pdf_new(y) = pdf_old(log1p(y)) * d/dy(log1p(y))
+    # where d/dy(log1p(y)) = 1/(1+y)
+    pdf_values = pdf_values_log / (1 + x_values)
+    
     plt.figure(figsize=(10, 6))
     plt.plot(x_values, pdf_values, label='Predicted PDF')
-    plt.axvline(x=y_test[sample_idx], color='r', linestyle='--', label='Actual value')
+    plt.axvline(x=y_raw_test[sample_idx], color='r', linestyle='--', label='Actual value')
     plt.axvline(x=y_pred[sample_idx], color='g', linestyle='--', label='Predicted value')
-    plt.fill_between(x_values, pdf_values, where=(x_values >= lower_bounds[sample_idx]) & (x_values <= upper_bounds[sample_idx]), 
+    plt.fill_between(x_values, pdf_values, 
+                    where=(x_values >= lower_bounds[sample_idx]) & (x_values <= upper_bounds[sample_idx]), 
                     alpha=0.3, color='blue', label='95% Confidence Interval')
     
-    # Set y-axis limit to 1e-4 if there are values higher than that
+    # Set y-axis limit to improve visualization
+    plt.ylim(bottom=0)
     y_max = np.max(pdf_values)
     if y_max > 1e-4:
-        plt.ylim(0, 1e-4)
+        plt.ylim(top=min(y_max*1.1, 1e-4))
     
     plt.xlabel('House Price')
     plt.ylabel('Probability Density')
@@ -128,7 +181,7 @@ def main():
     # 1. Multiple PDFs with different characteristics
     print("\nPlotting multiple PDFs with different characteristics...")
     # Select samples with different characteristics (low, medium, high prices)
-    sorted_indices = np.argsort(y_test)
+    sorted_indices = np.argsort(y_raw_test)
     diverse_indices = [
         sorted_indices[len(sorted_indices) // 10],  # Low price
         sorted_indices[len(sorted_indices) // 2],   # Medium price
@@ -140,26 +193,33 @@ def main():
     # Plot each distribution separately with correct data
     for i, idx in enumerate(diverse_indices):
         # Get PDF for this specific sample
-        sample_pdfs = model.predict_pdf(X_test.iloc[[idx]], method=smoothing_method)
-        x_vals, pdf_vals = sample_pdfs[0]
+        sample_pdfs_log = model.predict_pdf(X_test.iloc[[idx]], method=smoothing_method)
+        x_vals_log, pdf_vals_log = sample_pdfs_log[0]
         
-        # Get prediction (median) for this sample
+        # Transform x-values back to original scale
+        x_vals = np.expm1(x_vals_log)
+        
+        # Adjust PDF values for the change of variable
+        pdf_vals = pdf_vals_log / (1 + x_vals)
+        
+        # Get prediction for this sample
         pred_val = y_pred[idx]
         
         # Plot the distribution and vertical lines
         axes[i].plot(x_vals, pdf_vals, label='PDF')
-        axes[i].axvline(x=y_test[idx], color='r', linestyle='--', label='Actual')
+        axes[i].axvline(x=y_raw_test[idx], color='r', linestyle='--', label='Actual')
         axes[i].axvline(x=pred_val, color='g', linestyle='--', label='Predicted')
         
         # Fill the 95% confidence interval
         axes[i].fill_between(x_vals, pdf_vals, 
-                           where=(x_vals >= lower_bounds[idx]) & (x_vals <= upper_bounds[idx]), 
-                           alpha=0.3, color='blue', label='95% CI')
+                          where=(x_vals >= lower_bounds[idx]) & (x_vals <= upper_bounds[idx]), 
+                          alpha=0.3, color='blue', label='95% CI')
         
-        # Set y-axis limit to 1e-4 if there are values higher than that
+        # Set y-axis limits for better visualization
+        axes[i].set_ylim(bottom=0)
         y_max = np.max(pdf_vals)
         if y_max > 1e-4:
-            axes[i].set_ylim(0, 1e-4)
+            axes[i].set_ylim(top=min(y_max*1.1, 1e-4))
         
         price_category = "Low" if i == 0 else "Medium" if i == 1 else "High"
         axes[i].set_title(f'{price_category} Price Example')
@@ -183,14 +243,14 @@ def main():
         print(f"WARNING: Found {len(invalid_indices)} samples with negative confidence interval widths!")
         for idx in invalid_indices:
             print(f"Sample {idx}: Lower bound ({lower_bounds[idx]:.2f}) > Upper bound ({upper_bounds[idx]:.2f})")
-            print(f"  Actual value: {y_test[idx]:.2f}, Predicted value: {y_pred[idx]:.2f}")
+            print(f"  Actual value: {y_raw_test[idx]:.2f}, Predicted value: {y_pred[idx]:.2f}")
             # Fix by swapping lower and upper bounds for this sample
             lower_bounds[idx], upper_bounds[idx] = upper_bounds[idx], lower_bounds[idx]
         
         # Recalculate widths after fixing
         ci_widths = upper_bounds - lower_bounds
     
-    prediction_errors = np.abs(y_test - y_pred)
+    prediction_errors = np.abs(y_raw_test - y_pred)
     
     plt.figure(figsize=(10, 6))
     plt.scatter(ci_widths, prediction_errors, alpha=0.5)
@@ -270,7 +330,7 @@ def main():
     
     # Calculate coverage from intervals (using the direct interval method)
     print("\nCalculating confidence interval coverage...")
-    coverage = np.mean((y_test >= lower_bounds) & (y_test <= upper_bounds))
+    coverage = np.mean((y_raw_test >= lower_bounds) & (y_raw_test <= upper_bounds))
     print(f"95% Confidence Interval Coverage: {coverage:.2%}")
     
     # 4. Calibration plot - checking if confidence intervals are well-calibrated
@@ -285,12 +345,16 @@ def main():
     print("Calculating coverage for different confidence levels...")
     for conf_level in tqdm(confidence_levels, desc="Evaluating confidence levels"):
         # Get interval bounds for this confidence level using the same method
-        lower, upper = model.predict_interval(X_test, confidence_level=conf_level, method=smoothing_method)
+        lower_log, upper_log = model.predict_interval(X_test, confidence_level=conf_level, method=smoothing_method)
+        
+        # Transform bounds back to original scale
+        lower = np.expm1(lower_log)
+        upper = np.expm1(upper_log)
         
         # Calculate coverage
-        coverage = np.mean((y_test >= lower) & (y_test <= upper))
+        coverage = np.mean((y_raw_test >= lower) & (y_raw_test <= upper))
+        print(f"Coverage for {conf_level:.2f}: {coverage:.2%}")
         observed_coverages.append(coverage)
-        print(f"Coverage for {conf_level}: {coverage:.2%}")
     
     plt.figure(figsize=(10, 6))
     plt.plot(confidence_levels, observed_coverages, 'o-', label='Observed coverage')
@@ -338,3 +402,4 @@ if __name__ == "__main__":
     # Add the parent directory to the path to make imports work when run directly
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     main() 
+    

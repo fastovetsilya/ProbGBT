@@ -43,11 +43,11 @@ def main():
     # Initialize and train the ProbGBT model
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
-        num_quantiles=100, # Use less quantiles to speed up training
-        iterations=500, # Use less iterations to reduce overfitting
+        num_quantiles=100,
+        iterations=3000, # If not calibrated, use less iterations to reduce overfitting
         subsample=1.0,
         random_seed=1234,
-        calibrate=False,
+        calibrate=True, # Enable conformal calibration (uses some of the training data to calibrate the model), 
         train_separate_models=False # Train a single model for all quantiles
     )
 
@@ -56,11 +56,15 @@ def main():
         y_train, 
         cat_features=cat_features, 
         eval_set=(X_val, y_val), 
+        calibration_set=None, # Automatically use 20% of training data for calibration
         use_best_model=True, 
         verbose=True
     )
 
     # Make predictions
+    # Define smoothing method
+    smoothing_method = 'gmm' # Use GMM smoothing on top of spline for better curves (spline by default)
+
     print("\nMaking predictions...")
     y_pred = model.predict(X_test)
 
@@ -70,7 +74,7 @@ def main():
 
     # Predict confidence intervals
     print("\nPredicting confidence intervals...")
-    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95, method='gmm')
+    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95, method=smoothing_method)
     
     # Plot predictions vs actual for a subset of test samples
     print("\nPlotting predictions vs actual values...")
@@ -95,7 +99,7 @@ def main():
     # Plot PDF for a single example
     print("\nPlotting probability density function for a single example...")
     sample_idx = sample_indices[0]
-    pdfs = model.predict_pdf(X_test.iloc[[sample_idx]], method='gmm')
+    pdfs = model.predict_pdf(X_test.iloc[[sample_idx]], method=smoothing_method)
     x_values, pdf_values = pdfs[0]
 
     plt.figure(figsize=(10, 6))
@@ -134,8 +138,7 @@ def main():
     
     # Second pass to plot without y-axis limit adjustments
     for i, idx in enumerate(diverse_indices):
-        pdfs = model.predict_pdf(X_test.iloc[[idx]], method='gmm')
-        x_values, pdf_values = pdfs[0]
+        pdfs = model.predict_pdf(X_test.iloc[[idx]], method=smoothing_method)
         
         axes[i].plot(x_values, pdf_values, label='PDF')
         axes[i].axvline(x=y_test[idx], color='r', linestyle='--', label='Actual')
@@ -258,7 +261,7 @@ def main():
     print("Calculating coverage for different confidence levels...")
     for conf_level in tqdm(confidence_levels, desc="Evaluating confidence levels"):
         # Get interval bounds for this confidence level using the same method
-        lower, upper = model.predict_interval(X_test, confidence_level=conf_level, method='gmm')
+        lower, upper = model.predict_interval(X_test, confidence_level=conf_level, method=smoothing_method)
         
         # Calculate coverage
         coverage = np.mean((y_test >= lower) & (y_test <= upper))

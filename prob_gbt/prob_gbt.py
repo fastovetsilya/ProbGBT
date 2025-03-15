@@ -64,6 +64,7 @@ class ProbGBT:
         self.quantiles = None
         self.conformity_scores = None
         self.is_calibrated = False
+        self._last_pdfs = None
         
     def _generate_non_uniform_quantiles(self):
         """
@@ -559,12 +560,10 @@ class ProbGBT:
             Features to predict on.
         confidence_level : float, default=0.95
             Confidence level for the interval (between 0 and 1).
-        method : str, default='gmm'
+        method : str, default='spline'
             Method to use for PDF smoothing ('gmm' or 'spline').
-            Only used if the model is not calibrated.
         num_points : int, default=1000
             Number of points to use for the PDF.
-            Only used if the model is not calibrated.
             
         Returns:
         --------
@@ -586,12 +585,10 @@ class ProbGBT:
         lower_q = (1 - confidence_level) / 2
         upper_q = 1 - lower_q
         
-        # Find the closest available quantiles in our model
-        # For increased accuracy, we can use interpolation between quantiles if needed
+        # Check if we should use the direct quantile approach for calibrated models
+        # This is more reliable for ensuring proper coverage
         if self.calibrate and self.is_calibrated:
-            # For calibrated models, we need to be more careful with quantile selection
-            # Directly use the appropriate quantiles without interpolation to preserve 
-            # the conformal guarantees
+            # Find the closest available quantiles in our model
             lower_idx = np.argmin(np.abs(self.quantiles - lower_q))
             upper_idx = np.argmin(np.abs(self.quantiles - upper_q))
             
@@ -607,11 +604,25 @@ class ProbGBT:
             lower_bounds = quantile_preds[:, lower_idx]
             upper_bounds = quantile_preds[:, upper_idx]
             
+            # Now get smoothed PDFs based on calibrated quantiles for better visualization
+            # But use the direct quantile predictions for the intervals
+            pdfs = []
+            for i in tqdm(range(quantile_preds.shape[0]), desc="Processing samples"):
+                # Get smoothed PDF (only compute for visualization - not for intervals)
+                x_values, pdf_values, _, _ = self._get_smoothed_pdf(
+                    quantile_preds, i, num_points=num_points, method=method
+                )
+                pdfs.append((x_values, pdf_values))
+            
+            # Store PDFs as a class attribute for later access
+            self._last_pdfs = pdfs
+            
             return lower_bounds, upper_bounds
         
-        # If not calibrated, use the original PDF approach for best accuracy
+        # If not calibrated, use smoothed approach
         lower_bounds = []
         upper_bounds = []
+        pdfs = []
         
         # Add tqdm progress bar
         for i in tqdm(range(quantile_preds.shape[0]), desc="Processing samples"):
@@ -620,16 +631,12 @@ class ProbGBT:
                 quantile_preds, i, num_points=num_points, method=method
             )
             
-            # Compute the quantile values corresponding to the confidence interval
-            lower_q = (1 - confidence_level) / 2
-            upper_q = 1 - (1 - confidence_level) / 2
+            # Store PDF for later reference
+            pdfs.append((x_values, pdf_values))
             
-            # Using 'right' side to find the correct index for lower bound
-            # (the first index where CDF value is >= lower_quantile)
-            lower_idx = np.searchsorted(cdf_values, lower_q, side='right')
-            
-            # Using 'left' side to find the correct index for upper bound
-            # (the first index where CDF value is >= upper_quantile)
+            # For both bounds, use 'left' side for consistent quantile extraction
+            # This finds the smallest x value such that CDF(x) >= target_probability
+            lower_idx = np.searchsorted(cdf_values, lower_q, side='left')
             upper_idx = np.searchsorted(cdf_values, upper_q, side='left')
             
             # Ensure indices are within bounds
@@ -642,6 +649,9 @@ class ProbGBT:
             
             lower_bounds.append(lower_bound)
             upper_bounds.append(upper_bound)
+        
+        # Store PDFs as a class attribute for later access
+        self._last_pdfs = pdfs
         
         return np.array(lower_bounds), np.array(upper_bounds)
     
@@ -1054,9 +1064,9 @@ class ProbGBT:
         """
         Predict both calibrated confidence intervals and a smooth probability distribution.
         
-        This method combines the best of both approaches:
+        This method provides a complete probabilistic forecast including:
         1. Calibrated intervals with proper coverage guarantees
-        2. Smooth probability distribution for visualization
+        2. Smooth probability distribution using the same calibrated quantiles
         
         Parameters:
         -----------
@@ -1075,32 +1085,71 @@ class ProbGBT:
             - 'intervals': A dict mapping confidence levels to (lower_bounds, upper_bounds) tuples
             - 'pdf': A list of tuples (x_values, pdf_values) for each sample
             - 'mean': Mean prediction for each sample
-            - 'median': Median prediction for each sample
         """
         if confidence_levels is None:
             confidence_levels = [0.5, 0.8, 0.9, 0.95, 0.99]
         
         results = {}
         
-        # Get mean/median predictions
+        # Get mean predictions
         results['mean'] = self.predict(X)
         
         # Get calibrated intervals for each confidence level
         intervals = {}
-        for level in confidence_levels:
-            lower, upper = self.predict_interval(X, confidence_level=level)
-            intervals[level] = (lower, upper)
+        
+        # The level=0.95 will trigger computation of PDFs which we'll reuse
+        first_level = confidence_levels[0]
+        lower, upper = self.predict_interval(X, confidence_level=first_level, method=method, num_points=num_points)
+        intervals[first_level] = (lower, upper)
+        
+        # For calibrated models, get the remaining intervals using direct quantile approach
+        # This is more consistent with the calibration guarantees
+        if self.calibrate and self.is_calibrated:
+            for level in confidence_levels[1:]:
+                lower, upper = self.predict_interval(X, confidence_level=level, method=method, num_points=num_points)
+                intervals[level] = (lower, upper)
+        else:
+            # For uncalibrated models, we can use the smoothed PDFs for all intervals
+            # Get PDFs stored from the first predict_interval call
+            pdfs = self._last_pdfs
+            
+            # For each confidence level (except the first one we already computed)
+            for level in confidence_levels[1:]:
+                lower_q = (1 - level) / 2
+                upper_q = 1 - lower_q
+                
+                lower_bounds = []
+                upper_bounds = []
+                
+                # Extract intervals from the stored PDFs
+                for i, (x_values, pdf_values) in enumerate(pdfs):
+                    # Recompute CDF (since it's not stored in _last_pdfs)
+                    cdf_values = cumulative_trapezoid(pdf_values, x_values, initial=0)
+                    
+                    # Normalize CDF to ensure it ends at 1.0
+                    if cdf_values[-1] > 0:
+                        cdf_values /= cdf_values[-1]
+                    
+                    # Find the smallest x value such that CDF(x) >= target_probability
+                    lower_idx = np.searchsorted(cdf_values, lower_q, side='left')
+                    upper_idx = np.searchsorted(cdf_values, upper_q, side='left')
+                    
+                    # Ensure indices are within bounds
+                    lower_idx = max(0, min(lower_idx, len(x_values) - 1))
+                    upper_idx = max(0, min(upper_idx, len(x_values) - 1))
+                    
+                    # Get the x values at those indices
+                    lower_bound = x_values[lower_idx]
+                    upper_bound = x_values[upper_idx]
+                    
+                    lower_bounds.append(lower_bound)
+                    upper_bounds.append(upper_bound)
+                
+                intervals[level] = (np.array(lower_bounds), np.array(upper_bounds))
+        
         results['intervals'] = intervals
         
-        # Get smooth distribution (decide whether to use calibrated or uncalibrated)
-        # For visualization purposes, uncalibrated often gives smoother curves
-        if self.calibrate and self.is_calibrated:
-            # Use calibrated for intervals but uncalibrated for PDFs
-            results['pdf'] = self.predict_pdf(X, method=method, num_points=num_points, use_calibration=False)
-            # Also include calibrated PDFs for comparison
-            results['pdf_calibrated'] = self.predict_pdf(X, method=method, num_points=num_points, use_calibration=True)
-        else:
-            # Just use the regular PDF if no calibration is available
-            results['pdf'] = self.predict_pdf(X, method=method, num_points=num_points)
+        # Use the PDFs that were already computed during predict_interval
+        results['pdf'] = self._last_pdfs
         
         return results 

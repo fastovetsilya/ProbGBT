@@ -209,10 +209,23 @@ def main():
     fig2.savefig('./images/california_uncertainty_map.png', dpi=300, bbox_inches='tight')
     print("Saved uncertainty map to ./images/california_uncertainty_map.png")
     
+    # Plot absolute uncertainty
+    absolute_uncertainty = upper_bounds - lower_bounds
+    fig3 = plot_california_map(
+        grid_points, absolute_uncertainty,
+        title='Absolute Uncertainty in California\n(95% CI Width in Dollars)',
+        cmap='RdYlBu_r',  # Red for high uncertainty, blue for low
+        colorbar_label='Confidence Interval Width ($)',
+        alpha=0.05,
+        boundary_shape=boundary_shape
+    )
+    fig3.savefig('./images/california_absolute_uncertainty_map.png', dpi=300, bbox_inches='tight')
+    print("Saved absolute uncertainty map to ./images/california_absolute_uncertainty_map.png")
+    
     # Create a combined visualization
     print("\nCreating combined visualization...")
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 10))
-    
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(36, 10))
+
     # Create bounding box for California with padding
     bounds = box(
         grid_points['longitude'].min() - 0.5,
@@ -223,19 +236,12 @@ def main():
     bounds_gdf = gpd.GeoDataFrame(geometry=[bounds], crs="EPSG:4326").to_crs(epsg=3857)
     boundary_gdf = gpd.GeoDataFrame(geometry=[boundary_shape], crs="EPSG:4326").to_crs(epsg=3857)
     
-    # Set the map extent for both plots
-    ax1.set_xlim(bounds_gdf.geometry.iloc[0].bounds[0], bounds_gdf.geometry.iloc[0].bounds[2])
-    ax1.set_ylim(bounds_gdf.geometry.iloc[0].bounds[1], bounds_gdf.geometry.iloc[0].bounds[3])
-    ax2.set_xlim(bounds_gdf.geometry.iloc[0].bounds[0], bounds_gdf.geometry.iloc[0].bounds[2])
-    ax2.set_ylim(bounds_gdf.geometry.iloc[0].bounds[1], bounds_gdf.geometry.iloc[0].bounds[3])
-    
-    # Add base maps first
-    ctx.add_basemap(ax1, source=ctx.providers.CartoDB.Positron, zoom=8)
-    ctx.add_basemap(ax2, source=ctx.providers.CartoDB.Positron, zoom=8)
-    
-    # Plot boundaries
-    boundary_gdf.boundary.plot(ax=ax1, color='red', linewidth=1, alpha=0.5)
-    boundary_gdf.boundary.plot(ax=ax2, color='red', linewidth=1, alpha=0.5)
+    # Set the map extent for all plots
+    for ax in [ax1, ax2, ax3]:
+        ax.set_xlim(bounds_gdf.geometry.iloc[0].bounds[0], bounds_gdf.geometry.iloc[0].bounds[2])
+        ax.set_ylim(bounds_gdf.geometry.iloc[0].bounds[1], bounds_gdf.geometry.iloc[0].bounds[3])
+        ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron, zoom=8)
+        boundary_gdf.boundary.plot(ax=ax, color='red', linewidth=1, alpha=0.5)
     
     # Price predictions
     gdf_prices = gpd.GeoDataFrame(
@@ -259,16 +265,16 @@ def main():
     ax1.set_title('Predicted House Prices', pad=20, size=14)
     ax1.set_axis_off()
     
-    # Uncertainty
-    gdf_uncertainty = gpd.GeoDataFrame(
+    # Relative Uncertainty
+    gdf_rel_uncertainty = gpd.GeoDataFrame(
         {'values': relative_uncertainty},
         geometry=[Point(xy) for xy in zip(grid_points['longitude'], grid_points['latitude'])],
         crs="EPSG:4326"
     ).to_crs(epsg=3857)
     
     scatter2 = ax2.scatter(
-        gdf_uncertainty.geometry.x,
-        gdf_uncertainty.geometry.y,
+        gdf_rel_uncertainty.geometry.x,
+        gdf_rel_uncertainty.geometry.y,
         c=relative_uncertainty,
         cmap='RdYlBu_r',
         alpha=0.05,
@@ -278,8 +284,30 @@ def main():
     )
     cbar2 = plt.colorbar(scatter2, ax=ax2)
     cbar2.set_label('Relative Uncertainty', size=12)
-    ax2.set_title('Prediction Uncertainty\n(95% CI Width / Predicted Price)', pad=20, size=14)
+    ax2.set_title('Relative Uncertainty\n(95% CI Width / Predicted Price)', pad=20, size=14)
     ax2.set_axis_off()
+    
+    # Absolute Uncertainty
+    gdf_abs_uncertainty = gpd.GeoDataFrame(
+        {'values': absolute_uncertainty},
+        geometry=[Point(xy) for xy in zip(grid_points['longitude'], grid_points['latitude'])],
+        crs="EPSG:4326"
+    ).to_crs(epsg=3857)
+    
+    scatter3 = ax3.scatter(
+        gdf_abs_uncertainty.geometry.x,
+        gdf_abs_uncertainty.geometry.y,
+        c=absolute_uncertainty,
+        cmap='RdYlBu_r',
+        alpha=0.05,
+        s=500,
+        edgecolors='white',
+        linewidth=0.5
+    )
+    cbar3 = plt.colorbar(scatter3, ax=ax3)
+    cbar3.set_label('Confidence Interval Width ($)', size=12)
+    ax3.set_title('Absolute Uncertainty\n(95% CI Width in Dollars)', pad=20, size=14)
+    ax3.set_axis_off()
     
     plt.tight_layout()
     plt.savefig('./images/california_combined_map.png', dpi=300, bbox_inches='tight')

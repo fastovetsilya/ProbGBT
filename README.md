@@ -170,7 +170,6 @@ ProbGBT offers two approaches for obtaining the calibration dataset required for
 3. The model is trained on the remaining `(1-calibration_size)` fraction.
 4. The calibration set is used to compute nonconformity scores for each quantile.
 
-For time series data or when data ordering matters, it's recommended to manually prepare a calibration set rather than relying on random splitting.
 
 ### Geospatial Regression
 
@@ -183,6 +182,8 @@ ProbGBT excels at geospatial regression tasks, providing uncertainty estimates a
 2. **Location-specific Uncertainty**:
    - Identifies areas with high prediction uncertainty
    - Helps in risk assessment and decision making
+   - Provides both absolute and relative uncertainty measures
+   - Enables comparison of uncertainty across different price ranges and regions
 
 3. **Smooth Interpolation**:
    - Generates continuous prediction surfaces
@@ -197,13 +198,26 @@ ProbGBT excels at geospatial regression tasks, providing uncertainty estimates a
     <td><img src="./images/california_prices_map.png" alt="Predicted House Prices Map" width="100%"/></td>
   </tr>
   <tr>
-    <td><img src="./images/california_uncertainty_map.png" alt="Prediction Uncertainty Map" width="100%"/></td>
+    <td><img src="./images/california_absolute_uncertainty_map.png" alt="Absolute Uncertainty Map" width="100%"/></td>
+  </tr>
+  <tr>
+    <td><img src="./images/california_uncertainty_map.png" alt="Relative Uncertainty Map" width="100%"/></td>
   </tr>
 </table>
 
 *Top: Map showing predicted house prices across California, with color intensity representing price levels.*
 
-*Bottom: Map showing prediction uncertainty, where darker regions indicate higher uncertainty in the predictions.*
+*Middle: Map showing relative uncertainty (95% CI width / predicted price), where darker regions indicate higher relative uncertainty in the predictions. This visualization helps identify areas where predictions are more uncertain relative to the predicted price.*
+
+*Bottom: Map showing absolute uncertainty (95% CI width in dollars), where darker regions indicate larger prediction intervals in absolute terms. This visualization reveals areas with the highest absolute uncertainty in price predictions.*
+
+The model provides two complementary views of uncertainty:
+- **Relative Uncertainty**: Shows uncertainty as a percentage of the predicted value, useful for comparing uncertainty across different price ranges and identifying areas where predictions are proportionally more uncertain
+- **Absolute Uncertainty**: Shows the actual width of the prediction intervals in dollars, important for understanding the concrete range of possible values and identifying areas with the largest absolute price variations
+
+These complementary uncertainty measures serve different purposes:
+- Relative uncertainty helps identify regions where predictions are less reliable compared to the predicted price, regardless of the price level
+- Absolute uncertainty highlights areas where the actual price range is widest, which is particularly important for high-value regions where even a small percentage uncertainty can represent a significant dollar amount
 
 The geospatial capabilities make ProbGBT particularly useful for:
 - Real estate price prediction
@@ -218,7 +232,6 @@ The package includes example applications that demonstrate ProbGBT's capabilitie
 
 1. **Basic Regression**: Demonstrates core functionality with the California housing dataset
 2. **Geospatial Analysis**: Shows spatial prediction and uncertainty visualization
-3. **Time Series**: Illustrates handling of temporal data with uncertainty
 4. **Feature Analysis**: Explores relationship between features and prediction uncertainty
 
 These examples can be run using the provided scripts, with results saved as visualizations in the images directory.

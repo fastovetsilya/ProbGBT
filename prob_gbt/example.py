@@ -44,10 +44,10 @@ def main():
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=100, # Use less quantiles to speed up training
-        iterations=200, # Use less iterations to reduce overfitting
-        depth=4, # Use shallow trees to widen predictions
+        iterations=500, # Use less iterations to reduce overfitting
         subsample=1.0,
         random_seed=1234,
+        calibrate=False,
         train_separate_models=False # Train a single model for all quantiles
     )
 

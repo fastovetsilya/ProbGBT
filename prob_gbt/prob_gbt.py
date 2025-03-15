@@ -27,7 +27,8 @@ class ProbGBT:
                  depth=None,
                  subsample=1.0,
                  random_seed=42,
-                 train_separate_models=False):
+                 train_separate_models=False,
+                 calibrate=False):
         """
         Initialize the ProbGBT model.
         
@@ -47,6 +48,8 @@ class ProbGBT:
             Random seed for reproducibility.
         train_separate_models : bool, default=False
             If True, train separate models for each quantile instead of using MultiQuantile loss.
+        calibrate : bool, default=False
+            If True, use conformal prediction to calibrate predicted quantiles.
         """
         self.num_quantiles = num_quantiles
         self.iterations = iterations
@@ -55,9 +58,12 @@ class ProbGBT:
         self.subsample = subsample
         self.random_seed = random_seed
         self.train_separate_models = train_separate_models
+        self.calibrate = calibrate
         self.model = None
         self.trained_models = {}
         self.quantiles = None
+        self.conformity_scores = None
+        self.is_calibrated = False
         
     def _generate_non_uniform_quantiles(self):
         """
@@ -79,7 +85,8 @@ class ProbGBT:
         
         return non_uniform_quantiles
     
-    def train(self, X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True):
+    def train(self, X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True,
+             calibration_set=None, calibration_size=0.2):
         """
         Train the ProbGBT model.
         
@@ -97,6 +104,12 @@ class ProbGBT:
             If True, the best model on the validation set will be used.
         verbose : bool, default=True
             If True, print training progress.
+        calibration_set : tuple, optional
+            (X_cal, y_cal) for conformal calibration. If provided, this will be used instead of 
+            splitting from training data. Only used when calibrate=True.
+        calibration_size : float, default=0.2
+            Fraction of training data to use for calibration if calibration_set is not provided.
+            Only used when calibrate=True.
             
         Returns:
         --------
@@ -106,6 +119,39 @@ class ProbGBT:
         # Generate quantiles
         self.quantiles = self._generate_non_uniform_quantiles()
         
+        # If calibration is enabled and no calibration set is provided, split the training data
+        X_train, y_train = X, y
+        X_cal, y_cal = None, None
+        
+        if self.calibrate and calibration_set is None:
+            # Create a calibration set by splitting the training data
+            if verbose:
+                print(f"Splitting {calibration_size:.0%} of training data for calibration")
+            
+            # Random shuffling of indices
+            n_samples = len(y)
+            indices = np.arange(n_samples)
+            np.random.seed(self.random_seed)
+            np.random.shuffle(indices)
+            
+            # Determine split point
+            n_calibration = int(n_samples * calibration_size)
+            
+            # Split data
+            train_indices = indices[n_calibration:]
+            cal_indices = indices[:n_calibration]
+            
+            X_train = X.iloc[train_indices] if isinstance(X, pd.DataFrame) else X[train_indices]
+            y_train = y[train_indices]
+            X_cal = X.iloc[cal_indices] if isinstance(X, pd.DataFrame) else X[cal_indices]
+            y_cal = y[cal_indices]
+        elif self.calibrate and calibration_set is not None:
+            # Use the provided calibration set
+            X_cal, y_cal = calibration_set
+            if verbose:
+                print(f"Using provided calibration set with {len(y_cal)} samples")
+        
+        # Train on the training set (or full set if not calibrating)
         if self.train_separate_models:
             # Train separate models for each quantile
             self.trained_models = {}
@@ -127,7 +173,7 @@ class ProbGBT:
                 )
                 
                 # Train the model
-                model.fit(X, y, eval_set=eval_set, use_best_model=use_best_model, verbose=False)
+                model.fit(X_train, y_train, eval_set=eval_set, use_best_model=use_best_model, verbose=False)
                 
                 # Add the model to the trained_models dictionary
                 self.trained_models[q] = model
@@ -147,9 +193,74 @@ class ProbGBT:
             )
             
             # Train the model
-            self.model.fit(X, y, eval_set=eval_set, use_best_model=use_best_model, verbose=verbose)
+            self.model.fit(X_train, y_train, eval_set=eval_set, use_best_model=use_best_model, verbose=verbose)
+        
+        # Perform calibration if enabled
+        if self.calibrate and X_cal is not None and y_cal is not None:
+            self._calibrate(X_cal, y_cal, verbose)
         
         return self
+    
+    def _calibrate(self, X_cal, y_cal, verbose=True):
+        """
+        Calibrate the model using conformal prediction.
+        
+        Parameters:
+        -----------
+        X_cal : pandas.DataFrame or numpy.ndarray
+            Calibration features.
+        y_cal : numpy.ndarray
+            Calibration target values.
+        verbose : bool, default=True
+            If True, print calibration progress.
+        
+        Returns:
+        --------
+        None
+        """
+        if verbose:
+            print("Calibrating model using conformal prediction...")
+        
+        # Get uncalibrated quantile predictions on calibration set
+        quantile_preds = self.predict(X_cal, return_quantiles=True)
+        
+        # For a single sample
+        if len(quantile_preds.shape) == 1:
+            quantile_preds = quantile_preds.reshape(1, -1)
+        
+        # Calculate nonconformity scores for each quantile
+        n_samples = len(y_cal)
+        n_quantiles = len(self.quantiles)
+        
+        # Store calibration information
+        self.conformity_scores = {}
+        
+        # For each quantile, compute nonconformity scores
+        for q_idx, q in enumerate(self.quantiles):
+            # Extract predictions for this quantile
+            q_preds = quantile_preds[:, q_idx]
+            
+            # For lower tail: E_i = y_i - q̂_α(X_i)
+            # We want to adjust the quantile to ensure P(Y ≤ q̂_α(X)) = α
+            conformity_scores = y_cal - q_preds
+            
+            # Store the scores for this quantile
+            self.conformity_scores[q] = conformity_scores
+        
+        # Verify basic properties if verbose is enabled
+        if verbose:
+            for q in [0.1, 0.5, 0.9]:
+                if q in self.quantiles:
+                    q_idx = np.where(self.quantiles == q)[0][0]
+                    # Get predictions for this quantile
+                    q_preds = quantile_preds[:, q_idx]
+                    # Calculate empirical coverage (proportion of y values below prediction)
+                    empirical_coverage = np.mean(y_cal <= q_preds)
+                    print(f"Quantile {q}: Desired coverage = {q*100:.1f}%, Raw empirical coverage = {empirical_coverage*100:.1f}%")
+        
+        self.is_calibrated = True
+        if verbose:
+            print("Calibration completed successfully.")
     
     def predict(self, X, return_quantiles=False):
         """
@@ -174,7 +285,7 @@ class ProbGBT:
         elif not self.train_separate_models and self.model is None:
             raise ValueError("Model has not been trained yet. Call train() first.")
         
-        # Get quantile predictions
+        # Get raw quantile predictions
         if self.train_separate_models:
             # Convert X to DataFrame if it's not already
             if not isinstance(X, pd.DataFrame):
@@ -199,6 +310,40 @@ class ProbGBT:
         else:
             # Get quantile predictions from the single model
             quantile_preds = self.model.predict(X)
+        
+        # Apply calibration if enabled and model is calibrated
+        if self.calibrate and self.is_calibrated:
+            # Make a copy of the predictions to avoid modifying the original
+            calibrated_preds = quantile_preds.copy()
+            
+            # For each quantile, apply conformal calibration
+            for q_idx, q in enumerate(self.quantiles):
+                scores = self.conformity_scores[q]
+                n_cal = len(scores)
+                
+                # Calculate the adjustment using proper conformal prediction
+                # For each quantile q, we find s_hat such that:
+                # P(Y - q̂_α(X) ≤ s_hat) = q
+                # This is the (n_cal+1)*q / n_cal quantile of the scores
+                
+                # Handle extreme quantiles carefully
+                if q < 0.01:
+                    # For very low quantiles, be conservative
+                    s_hat = np.min(scores)
+                elif q > 0.99:
+                    # For very high quantiles, be conservative
+                    s_hat = np.max(scores)
+                else:
+                    # Find the empirical quantile of the scores
+                    # The (n+1)q/n formula is a finite-sample correction
+                    quantile_level = min(1.0, (n_cal + 1) * q / n_cal)
+                    s_hat = np.quantile(scores, quantile_level)
+                
+                # The calibrated prediction is q̂_α(X) + s_hat
+                calibrated_preds[:, q_idx] = quantile_preds[:, q_idx] + s_hat
+            
+            # Replace the raw predictions with calibrated predictions
+            quantile_preds = calibrated_preds
         
         if return_quantiles:
             return quantile_preds
@@ -416,8 +561,10 @@ class ProbGBT:
             Confidence level for the interval (between 0 and 1).
         method : str, default='gmm'
             Method to use for PDF smoothing ('gmm' or 'spline').
+            Only used if the model is not calibrated.
         num_points : int, default=1000
             Number of points to use for the PDF.
+            Only used if the model is not calibrated.
             
         Returns:
         --------
@@ -428,13 +575,41 @@ class ProbGBT:
         elif not self.train_separate_models and self.model is None:
             raise ValueError("Model has not been trained yet. Call train() first.")
         
-        # Get quantile predictions
+        # Get quantile predictions (these will already be calibrated if calibration is enabled)
         quantile_preds = self.predict(X, return_quantiles=True)
         
         # For a single sample
         if len(quantile_preds.shape) == 1:
             quantile_preds = quantile_preds.reshape(1, -1)
         
+        # Calculate the lower and upper quantiles for the confidence interval
+        lower_q = (1 - confidence_level) / 2
+        upper_q = 1 - lower_q
+        
+        # Find the closest available quantiles in our model
+        # For increased accuracy, we can use interpolation between quantiles if needed
+        if self.calibrate and self.is_calibrated:
+            # For calibrated models, we need to be more careful with quantile selection
+            # Directly use the appropriate quantiles without interpolation to preserve 
+            # the conformal guarantees
+            lower_idx = np.argmin(np.abs(self.quantiles - lower_q))
+            upper_idx = np.argmin(np.abs(self.quantiles - upper_q))
+            
+            # If the closest lower quantile is larger than our target, move one index back if possible
+            if self.quantiles[lower_idx] > lower_q and lower_idx > 0:
+                lower_idx -= 1
+                
+            # If the closest upper quantile is smaller than our target, move one index forward if possible
+            if self.quantiles[upper_idx] < upper_q and upper_idx < len(self.quantiles) - 1:
+                upper_idx += 1
+                
+            # Get the predicted values at those quantiles
+            lower_bounds = quantile_preds[:, lower_idx]
+            upper_bounds = quantile_preds[:, upper_idx]
+            
+            return lower_bounds, upper_bounds
+        
+        # If not calibrated, use the original PDF approach for best accuracy
         lower_bounds = []
         upper_bounds = []
         
@@ -470,7 +645,51 @@ class ProbGBT:
         
         return np.array(lower_bounds), np.array(upper_bounds)
     
-    def predict_pdf(self, X, num_points=1000, method='spline'):
+    def _get_uncalibrated_predictions(self, X):
+        """
+        Get raw, uncalibrated quantile predictions directly from the model.
+        
+        Parameters:
+        -----------
+        X : pandas.DataFrame or numpy.ndarray
+            Features to predict on.
+            
+        Returns:
+        --------
+        numpy.ndarray: Raw uncalibrated quantile predictions with shape (n_samples, n_quantiles)
+        """
+        if self.train_separate_models:
+            # Convert X to DataFrame if it's not already
+            if not isinstance(X, pd.DataFrame):
+                if len(X.shape) == 1:
+                    X = pd.DataFrame([X])
+                else:
+                    X = pd.DataFrame(X)
+            
+            # Get predictions for each quantile
+            quantile_preds = []
+            # Add tqdm progress bar
+            for i in tqdm(range(len(X)), desc="Getting uncalibrated predictions"):
+                sample_preds = []
+                # Create a single-row DataFrame for this sample to preserve categorical features
+                sample_df = X.iloc[[i]]
+                
+                for q in self.quantiles:
+                    # Predict using the DataFrame directly instead of reshaping to numpy array
+                    sample_preds.append(self.trained_models[q].predict(sample_df)[0])
+                quantile_preds.append(sample_preds)
+            quantile_preds = np.array(quantile_preds)
+        else:
+            # Get quantile predictions from the single model
+            quantile_preds = self.model.predict(X)
+            
+        # For a single sample
+        if len(quantile_preds.shape) == 1:
+            quantile_preds = quantile_preds.reshape(1, -1)
+            
+        return quantile_preds
+        
+    def predict_pdf(self, X, num_points=1000, method='spline', use_calibration=True):
         """
         Predict the probability density function for the given samples.
         
@@ -484,6 +703,10 @@ class ProbGBT:
             Method to use for PDF smoothing:
             - 'spline': Original method using GAM smoothing only (recommended)
             - 'gmm': Kernel Density Estimation applied on top of spline smoothing 
+        use_calibration : bool, default=True
+            Whether to base the PDF on calibrated quantiles (if available).
+            - True: Uses calibrated quantiles for better statistical coverage
+            - False: Uses raw uncalibrated quantiles, which may give smoother but less accurate distributions
             
         Returns:
         --------
@@ -494,12 +717,15 @@ class ProbGBT:
         elif not self.train_separate_models and self.model is None:
             raise ValueError("Model has not been trained yet. Call train() first.")
         
-        # Get quantile predictions
-        quantile_preds = self.predict(X, return_quantiles=True)
+        # Determine whether to use calibrated predictions
+        use_cal = use_calibration and self.calibrate and self.is_calibrated
         
-        # For a single sample
-        if len(quantile_preds.shape) == 1:
-            quantile_preds = quantile_preds.reshape(1, -1)
+        if use_cal:
+            # Get calibrated quantile predictions
+            quantile_preds = self.predict(X, return_quantiles=True)
+        else:
+            # Get uncalibrated quantile predictions directly from the model
+            quantile_preds = self._get_uncalibrated_predictions(X)
         
         results = []
         
@@ -554,6 +780,19 @@ class ProbGBT:
         if not self.train_separate_models:
             # Save single model using CatBoost's native method
             self.model.save_model(filepath, format=format)
+            
+            # If calibrated, save calibration information
+            if self.calibrate and self.is_calibrated:
+                # For single model, save calibration info separately
+                calibration_path = f"{filepath}.calibration.json"
+                calibration_data = {
+                    'quantiles': self.quantiles.tolist(),
+                    'conformity_scores': {str(q): scores.tolist() for q, scores in self.conformity_scores.items()},
+                    'is_calibrated': self.is_calibrated,
+                    'calibrate': self.calibrate
+                }
+                with open(calibration_path, 'w') as f:
+                    json.dump(calibration_data, f)
         else:
             # Save separate models to a tar.xz file
             # First, create a temporary directory to store models
@@ -568,10 +807,18 @@ class ProbGBT:
                     'random_seed': self.random_seed,
                     'train_separate_models': self.train_separate_models,
                     'quantiles': self.quantiles.tolist(),
+                    'calibrate': self.calibrate,
+                    'is_calibrated': self.is_calibrated
                 }
                 
                 with open(os.path.join(temp_dir, 'metadata.json'), 'w') as f:
                     json.dump(metadata, f)
+                
+                # Save calibration data if available
+                if self.calibrate and self.is_calibrated:
+                    calibration_data = {str(q): scores.tolist() for q, scores in self.conformity_scores.items()}
+                    with open(os.path.join(temp_dir, 'calibration.json'), 'w') as f:
+                        json.dump(calibration_data, f)
                 
                 # Save each model separately
                 model_dir = os.path.join(temp_dir, 'models')
@@ -656,6 +903,20 @@ class ProbGBT:
                 self.random_seed = metadata['random_seed']
                 self.train_separate_models = metadata['train_separate_models']
                 self.quantiles = np.array(metadata['quantiles'])
+                self.calibrate = metadata.get('calibrate', False)
+                self.is_calibrated = metadata.get('is_calibrated', False)
+                
+                # Load calibration data if available
+                if self.calibrate and self.is_calibrated:
+                    calibration_path = os.path.join(temp_dir, 'calibration.json')
+                    if os.path.exists(calibration_path):
+                        with open(calibration_path, 'r') as f:
+                            calibration_data = json.load(f)
+                            # Convert string keys back to float
+                            self.conformity_scores = {float(q): np.array(scores) for q, scores in calibration_data.items()}
+                    else:
+                        # If calibration data is missing, set is_calibrated to False
+                        self.is_calibrated = False
                 
                 # Load quantile mapping
                 with open(os.path.join(temp_dir, 'quantile_mapping.json'), 'r') as f:
@@ -694,6 +955,11 @@ class ProbGBT:
             self.model = CatBoostRegressor()
             self.model.load_model(filepath, format=format)
             
+            # Reset calibration attributes
+            self.calibrate = False
+            self.is_calibrated = False
+            self.conformity_scores = None
+            
             # Try to extract quantiles from the model parameters
             loss_function = self.model.get_param('loss_function')
             if loss_function and 'MultiQuantile:alpha=' in loss_function:
@@ -706,5 +972,135 @@ class ProbGBT:
             else:
                 # If we can't extract quantiles from the model, generate default ones
                 self.quantiles = self._generate_non_uniform_quantiles()
+            
+            # Check for calibration data
+            calibration_path = f"{filepath}.calibration.json"
+            if os.path.exists(calibration_path):
+                try:
+                    with open(calibration_path, 'r') as f:
+                        calibration_data = json.load(f)
+                        self.quantiles = np.array(calibration_data['quantiles'])
+                        self.conformity_scores = {float(q): np.array(scores) for q, scores in calibration_data['conformity_scores'].items()}
+                        self.is_calibrated = calibration_data['is_calibrated']
+                        self.calibrate = calibration_data['calibrate']
+                except Exception as e:
+                    print(f"Warning: Failed to load calibration data: {e}")
         
         return self 
+
+    def evaluate_calibration(self, X_val, y_val, confidence_levels=None):
+        """
+        Evaluate the calibration quality of the model on validation data.
+        
+        Parameters:
+        -----------
+        X_val : pandas.DataFrame or numpy.ndarray
+            Validation features.
+        y_val : numpy.ndarray
+            Validation target values.
+        confidence_levels : list, optional
+            List of confidence levels to evaluate. If None, uses [0.5, 0.8, 0.9, 0.95, 0.99].
+            
+        Returns:
+        --------
+        pandas.DataFrame
+            DataFrame containing desired vs. actual coverage for each confidence level.
+        """
+        if confidence_levels is None:
+            confidence_levels = [0.5, 0.8, 0.9, 0.95, 0.99]
+        
+        # Get predictions for all quantiles
+        quantile_preds = self.predict(X_val, return_quantiles=True)
+        
+        # For a single sample
+        if len(quantile_preds.shape) == 1:
+            quantile_preds = quantile_preds.reshape(1, -1)
+        
+        # Calculate coverage for each confidence level
+        coverage_results = []
+        for conf_level in confidence_levels:
+            # Calculate the lower and upper quantiles for this confidence level
+            lower_q = (1 - conf_level) / 2
+            upper_q = 1 - lower_q
+            
+            # Find indices for the closest quantiles
+            lower_idx = np.argmin(np.abs(self.quantiles - lower_q))
+            upper_idx = np.argmin(np.abs(self.quantiles - upper_q))
+            
+            # Extract predictions for these quantiles
+            lower_bounds = quantile_preds[:, lower_idx]
+            upper_bounds = quantile_preds[:, upper_idx]
+            
+            # Calculate coverage (percentage of true values within the bounds)
+            coverage = np.mean((y_val >= lower_bounds) & (y_val <= upper_bounds))
+            
+            # Calculate average interval width
+            avg_width = np.mean(upper_bounds - lower_bounds)
+            
+            coverage_results.append({
+                'confidence_level': conf_level,
+                'desired_coverage': conf_level,
+                'actual_coverage': coverage,
+                'average_width': avg_width,
+                'coverage_error': coverage - conf_level,
+                'lower_quantile': self.quantiles[lower_idx],
+                'upper_quantile': self.quantiles[upper_idx]
+            })
+        
+        # Return results as DataFrame
+        return pd.DataFrame(coverage_results) 
+
+    def predict_distribution(self, X, confidence_levels=None, method='spline', num_points=1000):
+        """
+        Predict both calibrated confidence intervals and a smooth probability distribution.
+        
+        This method combines the best of both approaches:
+        1. Calibrated intervals with proper coverage guarantees
+        2. Smooth probability distribution for visualization
+        
+        Parameters:
+        -----------
+        X : pandas.DataFrame or numpy.ndarray
+            Features to predict on.
+        confidence_levels : list of float, optional
+            List of confidence levels for prediction intervals. If None, uses [0.5, 0.8, 0.9, 0.95, 0.99].
+        method : str, default='spline'
+            Method to use for PDF smoothing ('gmm' or 'spline').
+        num_points : int, default=1000
+            Number of points to use for the PDF.
+            
+        Returns:
+        --------
+        dict: A dictionary containing:
+            - 'intervals': A dict mapping confidence levels to (lower_bounds, upper_bounds) tuples
+            - 'pdf': A list of tuples (x_values, pdf_values) for each sample
+            - 'mean': Mean prediction for each sample
+            - 'median': Median prediction for each sample
+        """
+        if confidence_levels is None:
+            confidence_levels = [0.5, 0.8, 0.9, 0.95, 0.99]
+        
+        results = {}
+        
+        # Get mean/median predictions
+        results['mean'] = self.predict(X)
+        
+        # Get calibrated intervals for each confidence level
+        intervals = {}
+        for level in confidence_levels:
+            lower, upper = self.predict_interval(X, confidence_level=level)
+            intervals[level] = (lower, upper)
+        results['intervals'] = intervals
+        
+        # Get smooth distribution (decide whether to use calibrated or uncalibrated)
+        # For visualization purposes, uncalibrated often gives smoother curves
+        if self.calibrate and self.is_calibrated:
+            # Use calibrated for intervals but uncalibrated for PDFs
+            results['pdf'] = self.predict_pdf(X, method=method, num_points=num_points, use_calibration=False)
+            # Also include calibrated PDFs for comparison
+            results['pdf_calibrated'] = self.predict_pdf(X, method=method, num_points=num_points, use_calibration=True)
+        else:
+            # Just use the regular PDF if no calibration is available
+            results['pdf'] = self.predict_pdf(X, method=method, num_points=num_points)
+        
+        return results 

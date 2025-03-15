@@ -46,6 +46,7 @@ def main():
         iterations=100,  # Using fewer iterations for this example
         subsample=1.0,
         random_seed=42,
+        calibrate=True,
         train_separate_models=False
     )
 
@@ -83,10 +84,11 @@ def main():
     print("\n--- Example 2: Separate Models Approach ---")
     print("Training ProbGBT model with separate quantile models...")
     model_separate = ProbGBT(
-        num_quantiles=10,  # Using fewer quantiles for this example
-        iterations=50,     # Using fewer iterations for this example
+        num_quantiles=50,  # Using fewer quantiles for this example
+        iterations=100,     # Using fewer iterations for this example
         subsample=1.0,
         random_seed=42,
+        calibrate=True,
         train_separate_models=True
     )
 
@@ -149,4 +151,4 @@ def main():
     print("A comparison plot was saved to 'saved_models/prediction_comparison.png'")
 
 if __name__ == "__main__":
-    main() 
+    main()

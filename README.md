@@ -145,6 +145,29 @@ calibration_results = model.evaluate_calibration(X_val, y_val)
 print(calibration_results)
 ```
 
+#### Calibration Dataset Options
+
+ProbGBT offers two approaches for obtaining the calibration dataset required for conformal prediction:
+
+1. **Automatic Splitting (Default)**:
+   - If no calibration set is provided, ProbGBT automatically splits a portion of the training data.
+   - The `calibration_size` parameter controls what fraction of the training data to use (default: 0.2).
+   - Pros: Simple, requires no additional data preparation.
+   - Cons: Reduces the effective training set size for model building.
+
+2. **Separate Calibration Dataset**:
+   - You can provide a separate calibration set using the `calibration_set=(X_cal, y_cal)` parameter.
+   - Pros: Maximizes the data available for training the base model, may provide better calibration if the calibration set is properly representative.
+   - Cons: Requires preparing a separate dataset, which should ideally come from the same distribution as the training data.
+
+**Note**: When no calibration set is provided and `calibration_size > 0`, the following occurs:
+1. The training data is randomly shuffled (controlled by `random_seed`).
+2. The first `calibration_size` fraction is reserved for calibration.
+3. The model is trained on the remaining `(1-calibration_size)` fraction.
+4. The calibration set is used to compute nonconformity scores for each quantile.
+
+For time series data or when data ordering matters, it's recommended to manually prepare a calibration set rather than relying on random splitting.
+
 ### Example Script
 
 The repository includes an example script that demonstrates how to use ProbGBT with the California housing prices dataset:
@@ -231,8 +254,22 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
 The calibration feature in ProbGBT uses conformal prediction to ensure that the predicted confidence intervals have the correct coverage probability. Here's how it works:
 
 1. **Calibration Set Creation**:
-   - During training, a portion of the data is reserved for calibration
-   - This can be either a split from the training data (specified by `calibration_size`) or a separate provided dataset (`calibration_set`)
+   - During training, a calibration set is required to compute nonconformity scores
+   - ProbGBT supports two approaches for obtaining this calibration set:
+     
+     a) **Automatic Splitting** (when `calibration_set=None`):
+     - A portion of the training data is reserved for calibration (`calibration_size` parameter, default: 0.2)
+     - The data is randomly shuffled (controlled by `random_seed`)
+     - The first `calibration_size` fraction becomes the calibration set
+     - The model is trained on the remaining (1-`calibration_size`) fraction
+     - This approach is simple but reduces the effective training set size
+     
+     b) **Separate Calibration Set** (when `calibration_set=(X_cal, y_cal)`):
+     - You provide a pre-defined calibration dataset
+     - The model is trained on the full training set
+     - Calibration is performed using the provided calibration set
+     - This approach is better when you have sufficient data or for time series where random splitting is inappropriate
+     - The calibration set should ideally come from the same distribution as the training data
 
 2. **Nonconformity Scores**:
    - For each quantile level α, the model computes nonconformity scores on the calibration set

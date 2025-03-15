@@ -33,8 +33,8 @@ def main():
     cat_features = ['ocean_proximity']
 
     # Split the data into train, validation, and test sets
-    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
-    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=1234)
+    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=1234)
 
     print(f"Training set: {X_train.shape[0]} samples")
     print(f"Validation set: {X_val.shape[0]} samples")
@@ -43,10 +43,10 @@ def main():
     # Initialize and train the ProbGBT model
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
-        num_quantiles=50,
-        iterations=300,
+        num_quantiles=100,
+        iterations=250,
         subsample=1.0,
-        random_seed=42,
+        random_seed=1234,
         train_separate_models=False
     )
 
@@ -69,12 +69,8 @@ def main():
 
     # Predict confidence intervals
     print("\nPredicting confidence intervals...")
-    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95)
-
-    # Calculate coverage (percentage of true values within the confidence interval)
-    coverage = np.mean((y_test >= lower_bounds) & (y_test <= upper_bounds))
-    print(f"95% Confidence Interval Coverage: {coverage:.2%}")
-
+    lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95, method='spline')
+    
     # Plot predictions vs actual for a subset of test samples
     print("\nPlotting predictions vs actual values...")
     sample_indices = np.random.choice(len(y_test), size=10, replace=False)
@@ -98,7 +94,7 @@ def main():
     # Plot PDF for a single example
     print("\nPlotting probability density function for a single example...")
     sample_idx = sample_indices[0]
-    pdfs = model.predict_pdf(X_test.iloc[[sample_idx]])
+    pdfs = model.predict_pdf(X_test.iloc[[sample_idx]], method='spline')
     x_values, pdf_values = pdfs[0]
 
     plt.figure(figsize=(10, 6))
@@ -108,31 +104,10 @@ def main():
     plt.fill_between(x_values, pdf_values, where=(x_values >= lower_bounds[sample_idx]) & (x_values <= upper_bounds[sample_idx]), 
                     alpha=0.3, color='blue', label='95% Confidence Interval')
     
-    # Set appropriate y-axis limits to better visualize the PDF
-    # Use a more robust approach to handle sharp peaks while preserving the body of the distribution
-    # First, sort the PDF values and find the "elbow point" where the curve starts to rise sharply
-    sorted_pdf = np.sort(pdf_values)
-    # Calculate differences between consecutive values
-    diffs = np.diff(sorted_pdf)
-    # Find where the differences start to increase significantly (indicating the start of peaks)
-    # Use the 95th percentile of differences as a threshold for significant increase
-    threshold = np.percentile(diffs, 95)
-    peak_start_idx = np.where(diffs > threshold)[0]
-    
-    if len(peak_start_idx) > 0:
-        # If we found peaks, use the value at the start of the first significant peak as our limit
-        # and multiply by a factor to show some of the peak but not let it dominate
-        y_upper_limit = sorted_pdf[peak_start_idx[0]] * 2.5
-    else:
-        # If no sharp peaks, use a more conservative approach
-        y_upper_limit = np.percentile(pdf_values, 95) * 1.5
-    
-    # Ensure we're not cutting off too much of the distribution
-    # Make sure the limit is at least high enough to show the top 20% of non-peak values
-    min_acceptable_limit = np.percentile(pdf_values, 80)
-    y_upper_limit = max(y_upper_limit, min_acceptable_limit * 1.2)
-    
-    plt.ylim(0, y_upper_limit)
+    # Set y-axis limit to 1e-4 if there are values higher than that
+    y_max = np.max(pdf_values)
+    if y_max > 1e-4:
+        plt.ylim(0, 1e-4)
     
     plt.xlabel('House Price')
     plt.ylabel('Probability Density')
@@ -156,38 +131,9 @@ def main():
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
-    # Store all PDF values to calculate a common y-axis limit
-    all_pdf_values = []
-    
-    # First pass to collect all PDF values
+    # Second pass to plot without y-axis limit adjustments
     for i, idx in enumerate(diverse_indices):
-        pdfs = model.predict_pdf(X_test.iloc[[idx]])
-        x_values, pdf_values = pdfs[0]
-        all_pdf_values.extend(pdf_values)
-    
-    # Calculate a better common y-axis limit that handles sharp peaks
-    # Sort all PDF values
-    sorted_all_pdf = np.sort(all_pdf_values)
-    # Calculate differences between consecutive values
-    all_diffs = np.diff(sorted_all_pdf)
-    # Find where the differences start to increase significantly
-    threshold = np.percentile(all_diffs, 95)
-    peak_start_idx = np.where(all_diffs > threshold)[0]
-    
-    if len(peak_start_idx) > 0:
-        # If we found peaks, use the value at the start of the first significant peak
-        common_y_limit = sorted_all_pdf[peak_start_idx[0]] * 2.5
-    else:
-        # If no sharp peaks, use a more conservative approach
-        common_y_limit = np.percentile(all_pdf_values, 95) * 1.5
-    
-    # Ensure we're not cutting off too much of the distribution
-    min_acceptable_limit = np.percentile(all_pdf_values, 80)
-    common_y_limit = max(common_y_limit, min_acceptable_limit * 1.2)
-    
-    # Second pass to plot with the common y-axis limit
-    for i, idx in enumerate(diverse_indices):
-        pdfs = model.predict_pdf(X_test.iloc[[idx]])
+        pdfs = model.predict_pdf(X_test.iloc[[idx]], method='spline')
         x_values, pdf_values = pdfs[0]
         
         axes[i].plot(x_values, pdf_values, label='PDF')
@@ -197,8 +143,10 @@ def main():
                            where=(x_values >= lower_bounds[idx]) & (x_values <= upper_bounds[idx]), 
                            alpha=0.3, color='blue', label='95% CI')
         
-        # Set the common y-axis limit
-        axes[i].set_ylim(0, common_y_limit)
+        # Set y-axis limit to 1e-4 if there are values higher than that
+        y_max = np.max(pdf_values)
+        if y_max > 1e-4:
+            axes[i].set_ylim(0, 1e-4)
         
         price_category = "Low" if i == 0 else "Medium" if i == 1 else "High"
         axes[i].set_title(f'{price_category} Price Example')
@@ -292,6 +240,11 @@ def main():
     plt.savefig('./images/feature_uncertainty.png', dpi=300, bbox_inches='tight')
     print("Saved feature importance and uncertainty plot to ./images/feature_uncertainty.png")
     
+    # Calculate coverage from intervals (using the direct interval method)
+    print("\nCalculating confidence interval coverage...")
+    coverage = np.mean((y_test >= lower_bounds) & (y_test <= upper_bounds))
+    print(f"95% Confidence Interval Coverage: {coverage:.2%}")
+    
     # 4. Calibration plot - checking if confidence intervals are well-calibrated
     print("\nCreating calibration plot for confidence intervals...")
     # Create confidence levels array with 0.95 included exactly
@@ -300,13 +253,16 @@ def main():
     confidence_levels = np.concatenate([confidence_levels_1, np.array([0.95]), confidence_levels_2])
     observed_coverages = []
     
-    # Add progress bar for this computationally expensive operation
+    # Use tqdm for a single progress bar, with no extra print output
     print("Calculating coverage for different confidence levels...")
-    for conf_level in tqdm(confidence_levels):
-        lower, upper = model.predict_interval(X_test, confidence_level=conf_level)
+    for conf_level in tqdm(confidence_levels, desc="Evaluating confidence levels"):
+        # Get interval bounds for this confidence level using the same method
+        lower, upper = model.predict_interval(X_test, confidence_level=conf_level, method='spline')
+        
+        # Calculate coverage
         coverage = np.mean((y_test >= lower) & (y_test <= upper))
-        print(f"Coverage for {conf_level}: {coverage:.2%}")
         observed_coverages.append(coverage)
+        print(f"Coverage for {conf_level}: {coverage:.2%}")
     
     plt.figure(figsize=(10, 6))
     plt.plot(confidence_levels, observed_coverages, 'o-', label='Observed coverage')

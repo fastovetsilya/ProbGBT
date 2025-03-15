@@ -207,17 +207,10 @@ ProbGBT excels at geospatial regression tasks, providing uncertainty estimates a
 
 *Top: Map showing predicted house prices across California, with color intensity representing price levels.*
 
-*Middle: Map showing relative uncertainty (95% CI width / predicted price), where darker regions indicate higher relative uncertainty in the predictions. This visualization helps identify areas where predictions are more uncertain relative to the predicted price.*
+*Middle: Map showing absolute uncertainty (95% CI width in dollars), where darker regions indicate larger prediction intervals in absolute terms. This visualization reveals areas with the highest absolute uncertainty in price predictions.*
 
-*Bottom: Map showing absolute uncertainty (95% CI width in dollars), where darker regions indicate larger prediction intervals in absolute terms. This visualization reveals areas with the highest absolute uncertainty in price predictions.*
+*Bottom: Map showing relative uncertainty (95% CI width / predicted price), where darker regions indicate higher relative uncertainty in the predictions. This visualization helps identify areas where predictions are more uncertain relative to the predicted price.*
 
-The model provides two complementary views of uncertainty:
-- **Relative Uncertainty**: Shows uncertainty as a percentage of the predicted value, useful for comparing uncertainty across different price ranges and identifying areas where predictions are proportionally more uncertain
-- **Absolute Uncertainty**: Shows the actual width of the prediction intervals in dollars, important for understanding the concrete range of possible values and identifying areas with the largest absolute price variations
-
-These complementary uncertainty measures serve different purposes:
-- Relative uncertainty helps identify regions where predictions are less reliable compared to the predicted price, regardless of the price level
-- Absolute uncertainty highlights areas where the actual price range is widest, which is particularly important for high-value regions where even a small percentage uncertainty can represent a significant dollar amount
 
 The geospatial capabilities make ProbGBT particularly useful for:
 - Real estate price prediction

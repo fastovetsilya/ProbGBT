@@ -9,6 +9,7 @@ ProbGBT is a probabilistic machine learning model that extends gradient boosted 
 - **Flexible**: Works with both numerical and categorical features
 - **Efficient**: Built on top of CatBoost's fast gradient boosting implementation
 - **Multiple Training Strategies**: Supports both single model with MultiQuantile loss and separate models for each quantile
+- **Calibrated Predictions**: Uses conformal prediction to ensure statistically valid confidence intervals
 
 ## Example Visualizations
 
@@ -108,6 +109,42 @@ lower_gmm, upper_gmm = model.predict_interval(X_test, confidence_level=0.95, met
 pdfs_gmm = model.predict_pdf(X_test, method='gmm')
 ```
 
+### Using Calibration
+
+```python
+# Initialize a model with calibration enabled
+model = ProbGBT(
+    num_quantiles=50,
+    iterations=500,
+    calibrate=True  # Enable calibration
+)
+
+# Train the model with calibration
+# A portion of the training data will be used for calibration
+model.train(
+    X_train, y_train,
+    cat_features=cat_features,
+    calibration_size=0.2  # Use 20% of training data for calibration
+)
+
+# Alternatively, provide a separate calibration set
+model.train(
+    X_train, y_train,
+    cat_features=cat_features,
+    calibration_set=(X_cal, y_cal)  # Use separate calibration data
+)
+
+# Get calibrated confidence intervals
+lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95)
+
+# Get calibrated PDFs
+pdfs = model.predict_pdf(X_test, use_calibration=True)
+
+# Evaluate calibration quality
+calibration_results = model.evaluate_calibration(X_val, y_val)
+print(calibration_results)
+```
+
 ### Example Script
 
 The repository includes an example script that demonstrates how to use ProbGBT with the California housing prices dataset:
@@ -135,6 +172,7 @@ ProbGBT works by:
 2. **Multi-Quantile Regression**: Training a CatBoost model to predict multiple quantiles simultaneously (or separate models for each quantile)
 3. **Smoothing**: Using Generalized Additive Models (GAMs) to smooth the quantile function
 4. **PDF Estimation**: Computing the derivative of the smoothed quantile function to obtain the probability density function
+5. **Calibration** (optional): Using conformal prediction to ensure statistical validity of the confidence intervals
 
 ### Technical Details on PDF Generation
 
@@ -188,7 +226,36 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
    - The implementation uses scikit-learn's GaussianMixture with 3 components by default
    - The model includes sophisticated failure detection to fall back to spline smoothing when GMM fails to converge or produces unreliable distributions
 
-This approach allows ProbGBT to generate flexible, non-parametric probability distributions that can capture complex uncertainty patterns in the data, including multi-modal distributions, skewness, and heteroscedasticity.
+### Calibration Process
+
+The calibration feature in ProbGBT uses conformal prediction to ensure that the predicted confidence intervals have the correct coverage probability. Here's how it works:
+
+1. **Calibration Set Creation**:
+   - During training, a portion of the data is reserved for calibration
+   - This can be either a split from the training data (specified by `calibration_size`) or a separate provided dataset (`calibration_set`)
+
+2. **Nonconformity Scores**:
+   - For each quantile level α, the model computes nonconformity scores on the calibration set
+   - For the quantile q_α(X), the nonconformity score is: E_i = y_i - q_α(X_i)
+   - These scores represent how much the true values deviate from the predicted quantiles
+
+3. **Empirical Quantile Adjustment**:
+   - For each desired quantile level α, the model finds s_hat such that:
+     P(y - q_α(X) ≤ s_hat) = α
+   - This is calculated as the empirical (n+1)α/n quantile of the nonconformity scores
+   - The adjusted prediction is then: q_α_cal(X) = q_α(X) + s_hat
+
+4. **Interval Calculation**:
+   - For calibrated models, confidence intervals directly use the calibrated quantiles
+   - For a (1-α) confidence interval, the lower bound uses the α/2 quantile and the upper bound uses the (1-α/2) quantile
+   - These intervals have a theoretical guarantee to include the true value with at least the specified probability
+
+5. **PDF from Calibrated Quantiles**:
+   - When `use_calibration=True` in `predict_pdf()`, the smoothed PDF is constructed from the calibrated quantiles
+   - This ensures the PDF is consistent with the calibrated confidence intervals
+   - The resulting PDFs maintain statistical validity while providing smooth, continuous distributions
+
+The calibration process ensures that the model's uncertainty predictions are statistically valid and well-calibrated. This is particularly important in high-stakes applications where reliable uncertainty estimates are critical.
 
 ## API Reference
 
@@ -202,7 +269,8 @@ ProbGBT(
     depth=None,
     subsample=1.0,
     random_seed=42,
-    train_separate_models=False
+    train_separate_models=False,
+    calibrate=False
 )
 ```
 
@@ -215,13 +283,16 @@ ProbGBT(
 - `subsample`: Subsample ratio of the training instances (default: 1.0)
 - `random_seed`: Random seed for reproducibility (default: 42)
 - `train_separate_models`: If True, train separate models for each quantile instead of using MultiQuantile loss (default: False)
+- `calibrate`: If True, use conformal prediction to calibrate predicted quantiles (default: False)
 
 #### Methods:
 
-- `train(X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True)`: Train the model
+- `train(X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True, calibration_set=None, calibration_size=0.2)`: Train the model
 - `predict(X, return_quantiles=False)`: Make predictions
 - `predict_interval(X, confidence_level=0.95, method='spline', num_points=1000)`: Predict confidence intervals
-- `predict_pdf(X, num_points=1000, method='spline')`: Predict probability density functions
+- `predict_pdf(X, num_points=1000, method='spline', use_calibration=True)`: Predict probability density functions
+- `evaluate_calibration(X_val, y_val, confidence_levels=None)`: Evaluate calibration quality on validation data
+- `predict_distribution(X, confidence_levels=None, method='spline', num_points=1000)`: Get both calibrated intervals and smoothed PDFs
 - `save(filepath, format='cbm', compression_level=6)`: Save the trained model to a file
 - `load(filepath, format='cbm')`: Load a saved model from a file
 

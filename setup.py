@@ -17,6 +17,7 @@ setup(
         "geopandas>=1.0.1",
         "contextily>=1.6.2",
         "shapely>=2.0.3",
+        "alphashape>=1.3.1",
     ],
     entry_points={
         'console_scripts': [

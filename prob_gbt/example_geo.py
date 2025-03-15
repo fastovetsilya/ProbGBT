@@ -47,7 +47,7 @@ def create_california_grid(df, training_points, num_points=100):
 
 def plot_california_map(grid_points, values, title, cmap='viridis', 
                        colorbar_label=None, vmin=None, vmax=None,
-                       alpha=0.7, figsize=(15, 10), boundary_shape=None):
+                       alpha=0.4, figsize=(15, 10), boundary_shape=None):
     """Plot values on a map of California with a base map."""
     # Create a GeoDataFrame from the grid points
     geometry = [Point(xy) for xy in zip(grid_points['longitude'], grid_points['latitude'])]
@@ -148,7 +148,7 @@ def main():
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=100,
-        iterations=1000,
+        iterations=3500,
         subsample=1.0,
         random_seed=1234,
         calibrate=True,
@@ -166,7 +166,7 @@ def main():
 
     # Create a grid of points covering California
     print("\nCreating prediction grid...")
-    grid_points, boundary_shape = create_california_grid(housing_df, X_train, num_points=25)
+    grid_points, boundary_shape = create_california_grid(housing_df, X_train, num_points=100)
     
     # Make predictions on the grid
     print("Making predictions on the grid...")
@@ -191,7 +191,7 @@ def main():
         title='Predicted House Prices in California',
         cmap='viridis',
         colorbar_label='Median House Value ($)',
-        alpha=0.7,
+        alpha=0.05,
         boundary_shape=boundary_shape
     )
     fig1.savefig('./images/california_prices_map.png', dpi=300, bbox_inches='tight')
@@ -203,7 +203,7 @@ def main():
         title='Prediction Uncertainty in California\n(95% CI Width / Predicted Price)',
         cmap='RdYlBu_r',  # Red for high uncertainty, blue for low
         colorbar_label='Relative Uncertainty',
-        alpha=0.7,
+        alpha=0.05,
         boundary_shape=boundary_shape
     )
     fig2.savefig('./images/california_uncertainty_map.png', dpi=300, bbox_inches='tight')
@@ -249,7 +249,7 @@ def main():
         gdf_prices.geometry.y,
         c=predictions,
         cmap='viridis',
-        alpha=0.7,
+        alpha=0.05,
         s=500,
         edgecolors='white',
         linewidth=0.5
@@ -271,7 +271,7 @@ def main():
         gdf_uncertainty.geometry.y,
         c=relative_uncertainty,
         cmap='RdYlBu_r',
-        alpha=0.7,
+        alpha=0.05,
         s=500,
         edgecolors='white',
         linewidth=0.5

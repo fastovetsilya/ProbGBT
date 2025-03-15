@@ -79,6 +79,10 @@ poetry run run-example
 - pygam
 - matplotlib
 - tqdm
+- geopandas
+- contextily
+- shapely
+- alphashape
 
 ## Usage
 
@@ -168,24 +172,56 @@ ProbGBT offers two approaches for obtaining the calibration dataset required for
 
 For time series data or when data ordering matters, it's recommended to manually prepare a calibration set rather than relying on random splitting.
 
-### Example Script
+### Geospatial Regression
 
-The repository includes an example script that demonstrates how to use ProbGBT with the California housing prices dataset:
+ProbGBT excels at geospatial regression tasks, providing uncertainty estimates across geographical coordinates. Key capabilities include:
 
-```bash
-# Using Python directly
-python run_example.py
+1. **Spatial Distribution Modeling**: 
+   - Captures how distributions vary across locations
+   - Accounts for spatial patterns and relationships
 
-# Using Poetry
-poetry run run-example
-```
+2. **Location-specific Uncertainty**:
+   - Identifies areas with high prediction uncertainty
+   - Helps in risk assessment and decision making
 
-This will:
-1. Load the California housing prices dataset
-2. Train a ProbGBT model
-3. Make predictions with uncertainty estimates
-4. Calculate performance metrics
-5. Generate visualizations in the 'images' directory
+3. **Smooth Interpolation**:
+   - Generates continuous prediction surfaces
+   - Handles gaps in spatial coverage
+
+4. **Geographic Visualization**:
+   - Creates informative prediction maps
+   - Shows uncertainty variations across regions
+
+<table>
+  <tr>
+    <td><img src="./images/california_prices_map.png" alt="Predicted House Prices Map" width="100%"/></td>
+  </tr>
+  <tr>
+    <td><img src="./images/california_uncertainty_map.png" alt="Prediction Uncertainty Map" width="100%"/></td>
+  </tr>
+</table>
+
+*Top: Map showing predicted house prices across California, with color intensity representing price levels.*
+
+*Bottom: Map showing prediction uncertainty, where darker regions indicate higher uncertainty in the predictions.*
+
+The geospatial capabilities make ProbGBT particularly useful for:
+- Real estate price prediction
+- Environmental modeling
+- Climate studies
+- Resource distribution analysis
+- Risk assessment in geographical contexts
+
+### Example Applications
+
+The package includes example applications that demonstrate ProbGBT's capabilities:
+
+1. **Basic Regression**: Demonstrates core functionality with the California housing dataset
+2. **Geospatial Analysis**: Shows spatial prediction and uncertainty visualization
+3. **Time Series**: Illustrates handling of temporal data with uncertainty
+4. **Feature Analysis**: Explores relationship between features and prediction uncertainty
+
+These examples can be run using the provided scripts, with results saved as visualizations in the images directory.
 
 ## How It Works
 

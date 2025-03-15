@@ -171,27 +171,23 @@ ProbGBT offers two approaches for obtaining the calibration dataset required for
 4. The calibration set is used to compute nonconformity scores for each quantile.
 
 
-### Geospatial Regression
+### Example: Geospatial Regression
 
-ProbGBT excels at geospatial regression tasks, providing uncertainty estimates across geographical coordinates. Key capabilities include:
+ProbGBT can be effectively applied to geospatial regression tasks, where it provides uncertainty estimates across geographical coordinates. Here's how you can use it for such applications:
 
 1. **Spatial Distribution Modeling**: 
-   - Captures how distributions vary across locations
-   - Accounts for spatial patterns and relationships
+   - Model how distributions vary across locations
+   - Capture spatial patterns and relationships
 
 2. **Location-specific Uncertainty**:
-   - Identifies areas with high prediction uncertainty
-   - Helps in risk assessment and decision making
-   - Provides both absolute and relative uncertainty measures
-   - Enables comparison of uncertainty across different price ranges and regions
+   - Identify areas with high prediction uncertainty
+   - Support risk assessment and decision making
+   - Get both absolute and relative uncertainty measures
+   - Compare uncertainty across different price ranges and regions
 
 3. **Smooth Interpolation**:
-   - Generates continuous prediction surfaces
-   - Handles gaps in spatial coverage
-
-4. **Geographic Visualization**:
-   - Creates informative prediction maps
-   - Shows uncertainty variations across regions
+   - Generate continuous prediction surfaces
+   - Handle gaps in spatial coverage
 
 <table>
   <tr>
@@ -212,7 +208,7 @@ ProbGBT excels at geospatial regression tasks, providing uncertainty estimates a
 *Bottom: Map showing relative uncertainty (95% CI width / predicted price), where darker regions indicate higher relative uncertainty in the predictions. This visualization helps identify areas where predictions are more uncertain relative to the predicted price.*
 
 
-The geospatial capabilities make ProbGBT particularly useful for:
+This type of application makes ProbGBT particularly useful for tasks such as:
 - Real estate price prediction
 - Environmental modeling
 - Climate studies

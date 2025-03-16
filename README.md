@@ -186,14 +186,14 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
      - Produces the most flexible and accurate representations of complex distributions
      - Can effectively capture multi-modal distributions and asymmetric tails
      - Most computationally intensive method (slowest)
+     - Prone to under confidence (distributions too wide), but effectively fixed with conformal calibration (enabled by default)
    
    - **Spline-based smoothing (`spline`)**:
-     - Nonparametric approach that directly smooths the quantile function using GAMs
-     - Fits a Generalized Additive Model with monotonicity constraints
+     - Nonparametric approach that directly smooths the quantile function using splines
+     - Fits a Generalized Additive Model (splines) with monotonicity constraints
      - Fastest method with lowest computational overhead
      - May produce peaky or irregular distributions in some cases
-     - Used as a fallback method when other methods fail
-     - When GMM is selected but fails to converge, spline results are used instead
+     - Recommended when no calibration is used: produces most calibrated distributions
    
    - **Gaussian Mixture Model (`gmm`)**:
      - Semi-parametric approach that combines spline smoothing with Gaussian mixtures
@@ -202,10 +202,11 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
      - Moderate computational cost (between `spline` and `sample_kde` in terms of speed)
      - Produces smoother distributions than the spline method
      - May not capture extremely complex distributions as well as `sample_kde`
+     - When GMM is selected but fails to converge, spline results are used instead
 
    The choice of smoothing method depends on your specific needs:
       - Use `sample_kde` (default) for the most accurate representation when computational cost is not a concern
-      - Use `spline` for the fastest performance when dealing with large datasets
+      - Use `spline` for the fastest performance when dealing with large datasets or no calibration is used
       - Use `gmm` for a good balance between smooth distributions and reasonable performance
 
 ### Calibration Process

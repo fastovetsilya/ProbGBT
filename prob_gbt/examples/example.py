@@ -8,7 +8,7 @@ from matplotlib.gridspec import GridSpec
 from tqdm import tqdm
 from scipy.integrate import cumulative_trapezoid
 # Use relative imports for the package
-from .prob_gbt import ProbGBT
+from ..prob_gbt import ProbGBT
 
 def calculate_median(x_values, cdf_values):
     """Calculate the median from a CDF."""
@@ -74,7 +74,10 @@ def calculate_intervals_from_raw_quantiles(quantile_predictions, quantiles, conf
 
 def main():
     # Create images directory if it doesn't exist
-    os.makedirs("images", exist_ok=True)
+    # Get the script's directory and create images folder within it
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    images_dir = os.path.join(script_dir, "images")
+    os.makedirs(images_dir, exist_ok=True)
 
     # Load California housing prices dataset
     print("Loading California housing prices dataset...")
@@ -219,8 +222,8 @@ def main():
     plt.plot([y_raw_test.min(), y_raw_test.max()], [y_raw_test.min(), y_raw_test.max()], 'k--', label='Perfect prediction')
     plt.legend()
     plt.grid(True)
-    plt.savefig('./images/predictions_vs_actual.png', dpi=300, bbox_inches='tight')
-    print("Saved predictions vs actual plot to ./images/predictions_vs_actual.png")
+    plt.savefig(os.path.join(images_dir, 'predictions_vs_actual.png'), dpi=300, bbox_inches='tight')
+    print(f"Saved predictions vs actual plot to {os.path.join(images_dir, 'predictions_vs_actual.png')}")
 
     # Plot PDF for a single example
     print("\nPlotting probability density function for a single example...")
@@ -256,8 +259,8 @@ def main():
     plt.title(f'Predicted Probability Distribution for California House Sample {sample_idx}')
     plt.legend()
     plt.grid(True)
-    plt.savefig('./images/predicted_pdf.png', dpi=300, bbox_inches='tight')
-    print("Saved PDF plot to ./images/predicted_pdf.png")
+    plt.savefig(os.path.join(images_dir, 'predicted_pdf.png'), dpi=300, bbox_inches='tight')
+    print(f"Saved PDF plot to {os.path.join(images_dir, 'predicted_pdf.png')}")
 
     # NEW VISUALIZATIONS
     
@@ -312,8 +315,8 @@ def main():
         axes[i].legend()
     
     plt.tight_layout()
-    plt.savefig('./images/multiple_pdfs.png', dpi=300, bbox_inches='tight')
-    print("Saved multiple PDFs plot to ./images/multiple_pdfs.png")
+    plt.savefig(os.path.join(images_dir, 'multiple_pdfs.png'), dpi=300, bbox_inches='tight')
+    print(f"Saved multiple PDFs plot to {os.path.join(images_dir, 'multiple_pdfs.png')}")
     
     # 2. Confidence interval width vs. prediction error
     print("\nPlotting confidence interval width vs. prediction error...")
@@ -347,8 +350,8 @@ def main():
     plt.plot(ci_widths, p(ci_widths), "r--", alpha=0.8, label=f'Trend: y={z[0]:.2f}x+{z[1]:.2f}')
     plt.legend()
     
-    plt.savefig('./images/uncertainty_vs_error.png', dpi=300, bbox_inches='tight')
-    print("Saved uncertainty vs. error plot to ./images/uncertainty_vs_error.png")
+    plt.savefig(os.path.join(images_dir, 'uncertainty_vs_error.png'), dpi=300, bbox_inches='tight')
+    print(f"Saved uncertainty vs. error plot to {os.path.join(images_dir, 'uncertainty_vs_error.png')}")
     
     # 3. Feature importance and uncertainty
     print("\nPlotting feature importance and uncertainty relationship...")
@@ -407,8 +410,8 @@ def main():
             ax.set_ylabel('CI Width')
     
     plt.tight_layout()
-    plt.savefig('./images/feature_uncertainty.png', dpi=300, bbox_inches='tight')
-    print("Saved feature importance and uncertainty plot to ./images/feature_uncertainty.png")
+    plt.savefig(os.path.join(images_dir, 'feature_uncertainty.png'), dpi=300, bbox_inches='tight')
+    print(f"Saved feature importance and uncertainty plot to {os.path.join(images_dir, 'feature_uncertainty.png')}")
     
     # 4. Enhanced calibration plot with detailed metrics
     print("\nCreating calibration plot with metrics...")
@@ -521,8 +524,8 @@ def main():
     ax2.legend(loc='upper left')
     
     plt.tight_layout()
-    plt.savefig('./images/calibration_plot.png', dpi=300, bbox_inches='tight')
-    print("Saved calibration plot to ./images/calibration_plot.png")
+    plt.savefig(os.path.join(images_dir, 'calibration_plot.png'), dpi=300, bbox_inches='tight')
+    print(f"Saved calibration plot to {os.path.join(images_dir, 'calibration_plot.png')}")
     
     # 5. Calibration error plot - shows miscalibration by confidence level
     plt.figure(figsize=(10, 6))
@@ -549,10 +552,10 @@ def main():
     # Add horizontal lines showing acceptable error ranges (+/- 2%)
     plt.axhspan(-0.02, 0.02, alpha=0.1, color='green', label='±2% error range')
     
-    plt.savefig('./images/calibration_error_plot.png', dpi=300, bbox_inches='tight')
-    print("Saved calibration error plot to ./images/calibration_error_plot.png")
+    plt.savefig(os.path.join(images_dir, 'calibration_error_plot.png'), dpi=300, bbox_inches='tight')
+    print(f"Saved calibration error plot to {os.path.join(images_dir, 'calibration_error_plot.png')}")
 
-    print("\nExample completed. Check the generated plots in the images directory.")
+    print(f"\nExample completed. Check the generated plots in the {images_dir} directory.")
 
 if __name__ == "__main__":
     # Add the parent directory to the path to make imports work when run directly

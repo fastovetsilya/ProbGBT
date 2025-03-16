@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # Import the main function from the example module
-from prob_gbt.example import main
+from prob_gbt.examples.example import main
 
 if __name__ == "__main__":
     main() 

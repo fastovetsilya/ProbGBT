@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # Import the main function from the example_save_load module
-from prob_gbt.example_save_load import main
+from prob_gbt.examples.example_save_load import main
 
 if __name__ == "__main__":
     main() 

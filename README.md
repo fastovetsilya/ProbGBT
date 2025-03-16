@@ -15,7 +15,7 @@ ProbGBT is a fully nonparametric probabilistic machine learning model that exten
 
 ### Predictions with Confidence Intervals
 
-![Predictions vs Actual with Confidence Intervals](./images/predictions_vs_actual.png)
+![Predictions vs Actual with Confidence Intervals](prob_gbt/examples/images/predictions_vs_actual.png)
 
 *Scatter plot showing predicted vs actual values with 95% confidence intervals for selected samples.*
 
@@ -23,10 +23,10 @@ ProbGBT is a fully nonparametric probabilistic machine learning model that exten
 
 <table>
   <tr>
-    <td><img src="./images/predicted_pdf.png" alt="Single PDF Example" width="100%"/></td>
+    <td><img src="prob_gbt/examples/images/predicted_pdf.png" alt="Single PDF Example" width="100%"/></td>
   </tr>
   <tr>
-    <td><img src="./images/multiple_pdfs.png" alt="Multiple PDFs for Different Price Ranges" width="100%"/></td>
+    <td><img src="prob_gbt/examples/images/multiple_pdfs.png" alt="Multiple PDFs for Different Price Ranges" width="100%"/></td>
   </tr>
 </table>
 
@@ -36,11 +36,11 @@ ProbGBT is a fully nonparametric probabilistic machine learning model that exten
 
 ### Uncertainty Analysis
 
-![Uncertainty vs Error](./images/uncertainty_vs_error.png)
+![Uncertainty vs Error](prob_gbt/examples/images/uncertainty_vs_error.png)
 
 *Relationship between confidence interval width and prediction error, showing how larger uncertainty correlates with larger errors.*
 
-![Feature Importance and Uncertainty](./images/feature_uncertainty.png)
+![Feature Importance and Uncertainty](prob_gbt/examples/images/feature_uncertainty.png)
 
 *Feature importance and its relationship with prediction uncertainty, demonstrating which features contribute most to the model's predictions and uncertainty.*
 
@@ -48,10 +48,10 @@ ProbGBT is a fully nonparametric probabilistic machine learning model that exten
 
 <table>
   <tr>
-    <td><img src="./images/calibration_plot.png" alt="Calibration Plot" width="100%"/></td>
+    <td><img src="prob_gbt/examples/images/calibration_plot.png" alt="Calibration Plot" width="100%"/></td>
   </tr>
   <tr>
-    <td><img src="./images/calibration_error_plot.png" alt="Calibration Error Plot" width="100%"/></td>
+    <td><img src="prob_gbt/examples/images/calibration_error_plot.png" alt="Calibration Error Plot" width="100%"/></td>
   </tr>
 </table>
 
@@ -73,51 +73,29 @@ The calibration analysis is crucial for assessing the reliability of the model's
 
 ProbGBT's conformal calibration mechanism aims to ensure that the calibration curve stays close to the diagonal, providing statistically valid uncertainty estimates.
 
-## Installation
+## Quick Start
+
+### Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/ProbGBT.git
-cd ProbGBT
+# Recommended: Install with Poetry
+poetry install
 
-# Install dependencies
+# Alternative: Install with pip
 pip install -r requirements.txt
 ```
 
-Or using Poetry:
-
-```bash
-# Install dependencies with Poetry
-poetry install
-```
-
-## Dependencies
-
-- numpy
-- pandas
-- catboost
-- scipy
-- scikit-learn
-- pygam
-- matplotlib
-- tqdm
-
-## Usage
-
-For detailed usage examples, please refer to the example files in the `examples/` directory.
-
 ### Running Examples
 
-You can run the examples using:
-
 ```bash
-# Using Python directly
-python examples/run_example.py
-
-# Using Poetry
+# Using Poetry (recommended)
 poetry run python examples/run_example.py
+
 # Or, if configured in pyproject.toml
 poetry run run-example
+
+# Alternative: Using Python directly
+python examples/run_example.py
 ```
 
 This will:
@@ -126,6 +104,8 @@ This will:
 3. Make predictions with uncertainty estimates
 4. Calculate performance metrics
 5. Generate visualizations in the 'images' directory
+
+For detailed usage examples, please refer to the example files in the `examples/` directory.
 
 ## How It Works
 

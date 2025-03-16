@@ -77,24 +77,21 @@ ProbGBT's conformal calibration mechanism aims to ensure that the calibration cu
 
 ProbGBT provides fully nonparametric probabilistic predictions for geospatial data, enabling smooth uncertainty quantification across geographic regions. Below is an example with California housing prices where the model is trained using only latitude and longitude as features:
 
-<table>
-  <tr>
-    <td><img src="prob_gbt/examples/images/california_prices_map.png" alt="Predicted House Prices Map" width="100%"/></td>
-    <td><img src="prob_gbt/examples/images/california_uncertainty_map.png" alt="Prediction Uncertainty Map" width="100%"/></td>
-  </tr>
-  <tr>
-    <td><img src="prob_gbt/examples/images/california_absolute_uncertainty_map.png" alt="Absolute Uncertainty Map" width="100%"/></td>
-    <td><img src="prob_gbt/examples/images/california_combined_map.png" alt="Combined Visualization" width="100%"/></td>
-  </tr>
-</table>
+<img src="prob_gbt/examples/images/california_prices_map.png" alt="Predicted House Prices Map" width="80%"/>
 
-*Top left: Geographic distribution of predicted house prices across California.*
+*Geographic distribution of predicted house prices across California.*
 
-*Top right: Relative uncertainty (95% CI width / predicted price) showing which regions have more uncertain predictions.*
+<img src="prob_gbt/examples/images/california_uncertainty_map.png" alt="Prediction Uncertainty Map" width="80%"/>
 
-*Bottom left: Absolute uncertainty (95% CI width in dollars) highlighting areas with the widest prediction intervals.*
+*Relative uncertainty (95% CI width / predicted price) showing which regions have more uncertain predictions.*
 
-*Bottom right: Combined visualization showing all three metrics for easier comparison.*
+<img src="prob_gbt/examples/images/california_absolute_uncertainty_map.png" alt="Absolute Uncertainty Map" width="80%"/>
+
+*Absolute uncertainty (95% CI width in dollars) highlighting areas with the widest prediction intervals.*
+
+<img src="prob_gbt/examples/images/california_combined_map.png" alt="Combined Visualization" width="80%"/>
+
+*Combined visualization showing all three metrics for easier comparison.*
 
 
 ## Quick Start

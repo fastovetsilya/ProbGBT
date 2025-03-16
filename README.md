@@ -89,7 +89,7 @@ ProbGBT provides fully nonparametric probabilistic predictions for geospatial da
 
 *Absolute uncertainty (95% CI width in dollars) highlighting areas with the widest prediction intervals.*
 
-<img src="prob_gbt/examples/images/california_combined_map.png" alt="Combined Visualization" width="80%"/>
+<img src="prob_gbt/examples/images/california_combined_map.png" alt="Combined Visualization" width="100%"/>
 
 *Combined visualization showing all three metrics for easier comparison.*
 

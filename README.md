@@ -135,9 +135,8 @@ ProbGBT works by:
 
 1. **Quantile Transformation**: Generating non-uniformly spaced quantiles with more focus on the tails of the distribution
 2. **Multi-Quantile Regression**: Training a CatBoost model to predict multiple quantiles simultaneously (or separate models for each quantile)
-3. **Smoothing**: Using Generalized Additive Models (GAMs) to smooth the quantile function
-4. **PDF Estimation**: Computing the derivative of the smoothed quantile function to obtain the probability density function
-5. **Calibration** (optional): Using conformal prediction to ensure statistical validity of the confidence intervals
+3. **PDF Estimation**: Computing the probability density function from quantiles
+4. **Calibration** (optional): Using conformal prediction to ensure statistical validity of the confidence intervals
 
 ### Technical Details on PDF Generation
 
@@ -184,7 +183,7 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
 
    The choice of smoothing method depends on your specific needs:
       - Use `sample_kde` (default) for the most accurate representation when computational cost is not a concern
-      - Use `spline` for the fastest performance when dealing with large datasets or no calibration is used
+      - Use `spline` for the fastest performance when dealing with large datasets or when no calibration is used
       - Use `gmm` for a good balance between smooth distributions and reasonable performance
 
 ### Calibration Process

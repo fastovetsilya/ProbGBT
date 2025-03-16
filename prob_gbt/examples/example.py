@@ -261,6 +261,14 @@ def main():
     if y_max > 1e-4:
         plt.ylim(top=min(y_max*1.1, 1e-4))
     
+    # Set x-axis limits to ensure actual value (red line) is visible
+    # Get min/max x values from the distribution
+    x_min, x_max = np.min(x_values), np.max(x_values)
+    # Include actual value in limits with padding
+    x_min = min(x_min, y_raw_test[sample_idx] * 0.9)
+    x_max = max(x_max, y_raw_test[sample_idx] * 1.1)
+    plt.xlim(x_min, x_max)
+    
     plt.xlabel('House Price')
     plt.ylabel('Probability Density')
     plt.title(f'Predicted Probability Distribution for California House Sample {sample_idx}')
@@ -312,6 +320,14 @@ def main():
         y_max = np.max(pdf_vals)
         if y_max > 1e-4:
             axes[i].set_ylim(top=min(y_max*1.1, 1e-4))
+            
+        # Set x-axis limits to ensure actual value (red line) is visible
+        # Get min/max x values from the distribution
+        x_min, x_max = np.min(x_vals), np.max(x_vals)
+        # Include actual value in limits with padding
+        x_min = min(x_min, y_raw_test[idx] * 0.9)
+        x_max = max(x_max, y_raw_test[idx] * 1.1)
+        axes[i].set_xlim(x_min, x_max)
         
         price_category = "Low" if i == 0 else "Medium" if i == 1 else "High"
         axes[i].set_title(f'{price_category} Price Example')

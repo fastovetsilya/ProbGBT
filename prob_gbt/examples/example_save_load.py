@@ -45,7 +45,7 @@ def main():
         num_quantiles=20,
         iterations=100,  # Using fewer iterations for this example
         subsample=1.0,
-        random_seed=42,
+        random_seed=None,
         calibrate=True,
         train_separate_models=False
     )
@@ -83,7 +83,8 @@ def main():
     medians_orig = []
     medians_loaded = []
     
-    print("Comparing predictions from original and loaded models...")
+    print("\nComparing predictions from original and loaded models...")
+    
     for i in range(len(y_pred_single_orig)):
         # Extract x_values and cdf_values from distributions
         x_values_orig, _, cdf_values_orig = y_pred_single_orig[i]
@@ -113,7 +114,7 @@ def main():
         num_quantiles=50,  # Using fewer quantiles for this example
         iterations=100,     # Using fewer iterations for this example
         subsample=1.0,
-        random_seed=42,
+        random_seed=None,
         calibrate=True,
         train_separate_models=True
     )

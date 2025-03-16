@@ -404,9 +404,13 @@ class ProbGBT:
             y_max += 0.2 * y_range
             
             # Generate random uniform samples for probability values
-            np.random.seed(self.random_seed)  # For reproducibility
+            # Use a fixed seed based on the sample index to ensure reproducibility and consistency
+            fixed_seed = 42 + i if self.random_seed is None else self.random_seed + i
+            # Create a local random generator instead of affecting global state
+            rng = np.random.RandomState(fixed_seed)
             n_samples = num_points  # Number of samples to draw (same as num_points)
-            prob_samples = np.random.uniform(0, 1, n_samples)
+            # Use the local random generator
+            prob_samples = rng.uniform(0, 1, n_samples)
             
             # Interpolate to get samples from the empirical CDF
             samples = np.interp(prob_samples, self.quantiles, y_pred_sample)
@@ -636,7 +640,70 @@ class ProbGBT:
             quantile_preds = np.array(quantile_preds)
         else:
             # Get quantile predictions from the single model
-            quantile_preds = self.model.predict(X)
+            raw_preds = self.model.predict(X)
+            
+            # For a single sample, reshape to 2D
+            if len(raw_preds.shape) == 1:
+                raw_preds = raw_preds.reshape(1, -1)
+            
+            # By default, assume the predictions are already aligned with our quantiles
+            quantile_preds = raw_preds
+            
+            # Check if we need to reorder predictions based on saved quantile mapping
+            if hasattr(self, 'model_quantiles') and self.model_quantiles is not None:
+                # If we have saved model quantiles that differ from our quantiles, reorder
+                if len(self.model_quantiles) == raw_preds.shape[1] and not np.array_equal(self.model_quantiles, self.quantiles):
+                    # Create a new array for reordered predictions
+                    reordered_preds = np.zeros((raw_preds.shape[0], len(self.quantiles)))
+                    
+                    # For each quantile in self.quantiles, find the matching quantile in model_quantiles
+                    for i, q in enumerate(self.quantiles):
+                        # Find exact matching quantile or closest if not exact
+                        # Use approximate equality with tolerance for floating point precision
+                        tolerance = 1e-8
+                        matches = np.where(np.abs(self.model_quantiles - q) < tolerance)[0]
+                        if len(matches) > 0:
+                            # Approximate match found
+                            idx = matches[0]
+                        else:
+                            # Find closest match
+                            closest_q = self.model_quantiles[np.argmin(np.abs(self.model_quantiles - q))]
+                            idx = np.argmin(np.abs(self.model_quantiles - q))
+                        
+                        reordered_preds[:, i] = raw_preds[:, idx]
+                    
+                    quantile_preds = reordered_preds
+            # Our earlier logic for when we don't have a saved mapping but quantiles mismatch
+            elif raw_preds.shape[1] != len(self.quantiles):
+                # Try to extract the correct ordering from the model
+                model_quantiles = None
+                try:
+                    loss_function = self.model.get_param('loss_function')
+                    if loss_function and 'MultiQuantile:alpha=' in loss_function:
+                        quantiles_str = loss_function.split('MultiQuantile:alpha=')[1]
+                        model_quantiles = np.array([float(q.strip()) for q in quantiles_str.split(',')])
+                except:
+                    pass
+                
+                # If we have model_quantiles and self.quantiles, we need to reorder the predictions
+                if model_quantiles is not None and len(model_quantiles) == raw_preds.shape[1]:
+                    # Create a mapping from model_quantiles to indices
+                    model_indices = {q: i for i, q in enumerate(model_quantiles)}
+                    
+                    # Create a new array for reordered predictions
+                    reordered_preds = np.zeros((raw_preds.shape[0], len(self.quantiles)))
+                    
+                    # For each quantile in self.quantiles, find the closest in model_quantiles
+                    for i, q in enumerate(self.quantiles):
+                        # Find closest quantile in model_quantiles
+                        closest_q = model_quantiles[np.argmin(np.abs(model_quantiles - q))]
+                        closest_idx = model_indices[closest_q]
+                        reordered_preds[:, i] = raw_preds[:, closest_idx]
+                    
+                    quantile_preds = reordered_preds
+                else:
+                    # If we can't reorder properly, use raw predictions
+                    quantile_preds = raw_preds
             
         # For a single sample
         if len(quantile_preds.shape) == 1:
@@ -685,6 +752,30 @@ class ProbGBT:
             # Save single model using CatBoost's native method
             self.model.save_model(filepath, format=format)
             
+            # For single model, we need to save extra information to ensure
+            # consistent prediction ordering
+            
+            # Extract the quantiles directly from model's loss function
+            model_quantiles = None
+            try:
+                loss_function = self.model.get_param('loss_function')
+                if loss_function and 'MultiQuantile:alpha=' in loss_function:
+                    quantiles_str = loss_function.split('MultiQuantile:alpha=')[1]
+                    model_quantiles = np.array([float(q.strip()) for q in quantiles_str.split(',')])
+            except:
+                print("Warning: Could not extract quantiles from model loss function")
+            
+            # Save a mapping between the model's internal quantile order and our quantiles
+            quantile_mapping_data = {
+                'model_quantiles': model_quantiles.tolist() if model_quantiles is not None else None,
+                'saved_quantiles': self.quantiles.tolist()
+            }
+            
+            # Save this mapping
+            mapping_path = f"{filepath}.quantile_mapping.json"
+            with open(mapping_path, 'w') as f:
+                json.dump(quantile_mapping_data, f)
+            
             # If calibrated, save calibration information
             if self.calibrate and self.is_calibrated:
                 # For single model, save calibration info separately
@@ -697,6 +788,15 @@ class ProbGBT:
                 }
                 with open(calibration_path, 'w') as f:
                     json.dump(calibration_data, f)
+            else:
+                # Always save quantiles even if not calibrated
+                quantiles_path = f"{filepath}.quantiles.json"
+                quantiles_data = {
+                    'quantiles': self.quantiles.tolist()
+                }
+                with open(quantiles_path, 'w') as f:
+                    json.dump(quantiles_data, f)
+                    
         else:
             # Save separate models to a tar.xz file
             # First, create a temporary directory to store models
@@ -859,23 +959,19 @@ class ProbGBT:
             self.model = CatBoostRegressor()
             self.model.load_model(filepath, format=format)
             
-            # Reset calibration attributes
-            self.calibrate = False
-            self.is_calibrated = False
-            self.conformity_scores = None
-            
-            # Try to extract quantiles from the model parameters
-            loss_function = self.model.get_param('loss_function')
-            if loss_function and 'MultiQuantile:alpha=' in loss_function:
-                quantiles_str = loss_function.split('MultiQuantile:alpha=')[1]
+            # Load mapping between model quantiles and saved quantiles
+            self.model_quantiles = None
+            self.quantile_mapping = None
+            mapping_path = f"{filepath}.quantile_mapping.json"
+            if os.path.exists(mapping_path):
                 try:
-                    self.quantiles = np.array([float(q.strip()) for q in quantiles_str.split(',')])
-                except:
-                    # If we can't parse the quantiles, create default ones
-                    self.quantiles = self._generate_non_uniform_quantiles()
-            else:
-                # If we can't extract quantiles from the model, generate default ones
-                self.quantiles = self._generate_non_uniform_quantiles()
+                    with open(mapping_path, 'r') as f:
+                        mapping_data = json.load(f)
+                        if mapping_data['model_quantiles'] is not None:
+                            self.model_quantiles = np.array(mapping_data['model_quantiles'])
+                        self.quantiles = np.array(mapping_data['saved_quantiles'])
+                except Exception as e:
+                    pass
             
             # Check for calibration data
             calibration_path = f"{filepath}.calibration.json"
@@ -889,6 +985,40 @@ class ProbGBT:
                         self.calibrate = calibration_data['calibrate']
                 except Exception as e:
                     print(f"Warning: Failed to load calibration data: {e}")
+                    # Only reset if we failed to load
+                    self.calibrate = False
+                    self.is_calibrated = False
+                    self.conformity_scores = None
+            else:
+                # Only reset if no calibration data exists
+                self.calibrate = False
+                self.is_calibrated = False
+                self.conformity_scores = None
+                
+                # Try to load quantiles from separate file if not calibrated
+                # and if we don't have them from the mapping file
+                if self.quantiles is None:
+                    quantiles_path = f"{filepath}.quantiles.json"
+                    if os.path.exists(quantiles_path):
+                        try:
+                            with open(quantiles_path, 'r') as f:
+                                quantiles_data = json.load(f)
+                                self.quantiles = np.array(quantiles_data['quantiles'])
+                        except Exception as e:
+                            pass
+                    else:
+                        # As a last resort, try to extract quantiles from the model parameters
+                        loss_function = self.model.get_param('loss_function')
+                        if loss_function and 'MultiQuantile:alpha=' in loss_function:
+                            quantiles_str = loss_function.split('MultiQuantile:alpha=')[1]
+                            try:
+                                self.quantiles = np.array([float(q.strip()) for q in quantiles_str.split(',')])
+                            except:
+                                # If we can't parse the quantiles, create default ones
+                                self.quantiles = self._generate_non_uniform_quantiles()
+                        else:
+                            # If we can't extract quantiles from the model, generate default ones
+                            self.quantiles = self._generate_non_uniform_quantiles()
         
         return self 
 

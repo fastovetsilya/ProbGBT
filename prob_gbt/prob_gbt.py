@@ -224,7 +224,7 @@ class ProbGBT:
             print("Calibrating model using conformal prediction...")
         
         # Get uncalibrated quantile predictions on calibration set
-        quantile_preds = self.predict(X_cal, return_quantiles=True)
+        quantile_preds = self._get_uncalibrated_predictions(X_cal)
         
         # For a single sample
         if len(quantile_preds.shape) == 1:
@@ -264,34 +264,25 @@ class ProbGBT:
         if verbose:
             print("Calibration completed successfully.")
     
-    def predict(self, X, return_quantiles=False, method='sample_kde', num_points=1000):
+    def predict_raw(self, X):
         """
-        Predict the target values for the given samples.
+        Return raw quantile predictions from the model, applying calibration if enabled.
         
         Parameters:
         -----------
         X : pandas.DataFrame or numpy.ndarray
             Features to predict on.
-        return_quantiles : bool, default=False
-            Whether to return the predictions for all quantiles.
-        method : str, default='sample_kde'
-            Method to use for PDF smoothing:
-            - 'spline': Original method using GAM smoothing only
-            - 'gmm': Kernel Density Estimation applied on top of spline smoothing
-            - 'sample_kde': Sample from empirical CDF and apply KDE smoothing (default)
-        num_points : int, default=1000
-            Number of points to use for the PDF.
             
         Returns:
         --------
-        numpy.ndarray: Predictions for the samples.
+        numpy.ndarray: Raw quantile predictions with shape (n_samples, n_quantiles)
         """
         if self.train_separate_models and not self.trained_models:
             raise ValueError("Models have not been trained yet. Call train() first.")
         elif not self.train_separate_models and self.model is None:
             raise ValueError("Model has not been trained yet. Call train() first.")
         
-        # Get raw, uncalibrated quantile predictions from the model
+        # Get uncalibrated quantile predictions from the model
         quantile_preds = self._get_uncalibrated_predictions(X)
         
         # Apply calibration if enabled and model is calibrated
@@ -330,25 +321,49 @@ class ProbGBT:
             # Replace the raw predictions with calibrated predictions
             quantile_preds = calibrated_preds
         
-        if return_quantiles:
-            return quantile_preds
+        return quantile_preds
+    
+    
+    def predict(self, X, method='sample_kde', num_points=1000):
+        """
+        Predict the probability density function for the given samples.
         
-        # Calculate median predictions using the specified smoothing method
-        medians = []
+        Parameters:
+        -----------
+        X : pandas.DataFrame or numpy.ndarray
+            Features to predict on.
+        method : str, default='sample_kde'
+            Method to use for PDF smoothing:
+            - 'spline': Original method using GAM smoothing only
+            - 'gmm': Kernel Density Estimation applied on top of spline smoothing
+            - 'sample_kde': Sample from empirical CDF and apply KDE smoothing (default)
+        num_points : int, default=1000
+            Number of points to use for the PDF.
+            
+        Returns:
+        --------
+        list of tuples: [(x_values, pdf_values, cdf_values), ...] for each sample
+        """
+        if self.train_separate_models and not self.trained_models:
+            raise ValueError("Models have not been trained yet. Call train() first.")
+        elif not self.train_separate_models and self.model is None:
+            raise ValueError("Model has not been trained yet. Call train() first.")
         
-        for i in tqdm(range(quantile_preds.shape[0]), desc="Calculating medians"):
-            # Get smoothed PDF and CDF using the specified method
+        # Get calibrated quantile predictions
+        quantile_preds = self.predict_raw(X)
+        
+        results = []
+        
+        # Add tqdm progress bar
+        for i in tqdm(range(quantile_preds.shape[0]), desc="Generating PDFs"):
+            # Use the helper method to get smoothed PDF
             x_values, pdf_values, cdf_values, _ = self._get_smoothed_pdf(
                 quantile_preds, i, num_points=num_points, method=method
             )
             
-            # Find the median (point where CDF crosses 0.5)
-            median_idx = np.searchsorted(cdf_values, 0.5, side='left')
-            median_idx = max(0, min(median_idx, len(x_values) - 1))
-            median = x_values[median_idx]
-            medians.append(median)
+            results.append((x_values, pdf_values, cdf_values))
         
-        return np.array(medians)
+        return results
     
     def _get_smoothed_pdf(self, quantile_preds, i, num_points=1000, method='sample_kde'):
         """
@@ -357,7 +372,7 @@ class ProbGBT:
         Parameters:
         -----------
         quantile_preds : numpy.ndarray
-            Quantile predictions from predict() with return_quantiles=True.
+            Quantile predictions from predict()
         i : int
             Index of the sample in quantile_preds to process.
         num_points : int, default=1000
@@ -585,143 +600,6 @@ class ProbGBT:
         else:
             raise ValueError(f"Unknown method: {method}. Choose from 'spline', 'gmm', or 'sample_kde'.")
 
-    def predict_interval(self, X, confidence_level=0.95, method='sample_kde', num_points=1000):
-        """
-        Predict confidence intervals for the given samples using the smoothed PDF.
-        
-        Parameters:
-        -----------
-        X : pandas.DataFrame or numpy.ndarray
-            Features to predict on.
-        confidence_level : float, default=0.95
-            Confidence level for the interval (between 0 and 1).
-        method : str, default='sample_kde'
-            Method to use for PDF smoothing ('gmm', 'spline', or 'sample_kde').
-        num_points : int, default=1000
-            Number of points to use for the PDF.
-            
-        Returns:
-        --------
-        tuple: (lower_bounds, upper_bounds) arrays for the confidence intervals
-        """
-        if self.train_separate_models and not self.trained_models:
-            raise ValueError("Models have not been trained yet. Call train() first.")
-        elif not self.train_separate_models and self.model is None:
-            raise ValueError("Model has not been trained yet. Call train() first.")
-        
-        # Get quantile predictions (these will already be calibrated if calibration is enabled)
-        quantile_preds = self.predict(X, return_quantiles=True)
-        
-        # For a single sample
-        if len(quantile_preds.shape) == 1:
-            quantile_preds = quantile_preds.reshape(1, -1)
-        
-        # Calculate the lower and upper quantiles for the confidence interval
-        lower_q = (1 - confidence_level) / 2
-        upper_q = 1 - lower_q
-        
-        # Check if we should use the direct quantile approach for calibrated models
-        # This is more reliable for ensuring proper coverage
-        if self.calibrate and self.is_calibrated:
-            # Find the closest available quantiles in our model
-            lower_idx = np.argmin(np.abs(self.quantiles - lower_q))
-            upper_idx = np.argmin(np.abs(self.quantiles - upper_q))
-            
-            # If the closest lower quantile is larger than our target, move one index back if possible
-            if self.quantiles[lower_idx] > lower_q and lower_idx > 0:
-                lower_idx -= 1
-                
-            # If the closest upper quantile is smaller than our target, move one index forward if possible
-            if self.quantiles[upper_idx] < upper_q and upper_idx < len(self.quantiles) - 1:
-                upper_idx += 1
-                
-            # Get the predicted values at those quantiles
-            lower_bounds = quantile_preds[:, lower_idx]
-            upper_bounds = quantile_preds[:, upper_idx]
-            
-            # Now get smoothed PDFs based on calibrated quantiles for better visualization
-            # But use the direct quantile predictions for the intervals
-            pdfs = []
-            for i in tqdm(range(quantile_preds.shape[0]), desc="Processing samples"):
-                # Get smoothed PDF (only compute for visualization - not for intervals)
-                x_values, pdf_values, _, _ = self._get_smoothed_pdf(
-                    quantile_preds, i, num_points=num_points, method=method
-                )
-                pdfs.append((x_values, pdf_values))
-            
-            # Store PDFs as a class attribute for later access
-            self._last_pdfs = pdfs
-            
-            # Ensure lower bounds are always less than upper bounds
-            lower_bounds = np.array(lower_bounds)
-            upper_bounds = np.array(upper_bounds)
-            
-            # Find cases where bounds are reversed
-            swap_indices = np.where(lower_bounds > upper_bounds)[0]
-            if len(swap_indices) > 0:
-                # Swap the values where needed
-                temp = lower_bounds[swap_indices].copy()
-                lower_bounds[swap_indices] = upper_bounds[swap_indices]
-                upper_bounds[swap_indices] = temp
-                
-                # Log warning if bounds were swapped
-                if len(swap_indices) > 0:
-                    print(f"Warning: Swapped {len(swap_indices)} lower/upper bounds where lower > upper.")
-            
-            return lower_bounds, upper_bounds
-        
-        # If not calibrated, use smoothed approach
-        lower_bounds = []
-        upper_bounds = []
-        pdfs = []
-        
-        # Add tqdm progress bar
-        for i in tqdm(range(quantile_preds.shape[0]), desc="Processing samples"):
-            # Get smoothed PDF and CDF (only compute once)
-            x_values, pdf_values, cdf_values, quantiles_smooth = self._get_smoothed_pdf(
-                quantile_preds, i, num_points=num_points, method=method
-            )
-            
-            # Store PDF for later reference
-            pdfs.append((x_values, pdf_values))
-            
-            # For both bounds, use 'left' side for consistent quantile extraction
-            # This finds the smallest x value such that CDF(x) >= target_probability
-            lower_idx = np.searchsorted(cdf_values, lower_q, side='left')
-            upper_idx = np.searchsorted(cdf_values, upper_q, side='left')
-            
-            # Ensure indices are within bounds
-            lower_idx = max(0, min(lower_idx, len(x_values) - 1))
-            upper_idx = max(0, min(upper_idx, len(x_values) - 1))
-            
-            # Get the x values at those indices
-            lower_bound = x_values[lower_idx]
-            upper_bound = x_values[upper_idx]
-            
-            lower_bounds.append(lower_bound)
-            upper_bounds.append(upper_bound)
-        
-        # Store PDFs as a class attribute for later access
-        self._last_pdfs = pdfs
-        
-        # Ensure lower bounds are always less than upper bounds
-        lower_bounds = np.array(lower_bounds)
-        upper_bounds = np.array(upper_bounds)
-        
-        # Find cases where bounds are reversed
-        swap_indices = np.where(lower_bounds > upper_bounds)[0]
-        if len(swap_indices) > 0:
-            # Swap the values where needed
-            temp = lower_bounds[swap_indices].copy()
-            lower_bounds[swap_indices] = upper_bounds[swap_indices]
-            upper_bounds[swap_indices] = temp
-            
-            # Log warning if bounds were swapped
-            if len(swap_indices) > 0:
-                print(f"Warning: Swapped {len(swap_indices)} lower/upper bounds where lower > upper.")
-        
-        return lower_bounds, upper_bounds
-    
     def _get_uncalibrated_predictions(self, X):
         """
         Get raw, uncalibrated quantile predictions directly from the model.
@@ -766,58 +644,6 @@ class ProbGBT:
             
         return quantile_preds
         
-    def predict_pdf(self, X, num_points=1000, method='sample_kde', use_calibration=True):
-        """
-        Predict the probability density function for the given samples.
-        
-        Parameters:
-        -----------
-        X : pandas.DataFrame or numpy.ndarray
-            Features to predict on.
-        num_points : int, default=1000
-            Number of points to use for the PDF.
-        method : str, default='sample_kde'
-            Method to use for PDF smoothing:
-            - 'spline': Original method using GAM smoothing only
-            - 'gmm': Kernel Density Estimation applied on top of spline smoothing
-            - 'sample_kde': Sample from empirical CDF and apply KDE smoothing (default)
-        use_calibration : bool, default=True
-            Whether to base the PDF on calibrated quantiles (if available).
-            - True: Uses calibrated quantiles for better statistical coverage
-            - False: Uses raw uncalibrated quantiles, which may give smoother but less accurate distributions
-            
-        Returns:
-        --------
-        list of tuples: [(x_values, pdf_values), ...] for each sample
-        """
-        if self.train_separate_models and not self.trained_models:
-            raise ValueError("Models have not been trained yet. Call train() first.")
-        elif not self.train_separate_models and self.model is None:
-            raise ValueError("Model has not been trained yet. Call train() first.")
-        
-        # Determine whether to use calibrated predictions
-        use_cal = use_calibration and self.calibrate and self.is_calibrated
-        
-        if use_cal:
-            # Get calibrated quantile predictions
-            quantile_preds = self.predict(X, return_quantiles=True)
-        else:
-            # Get uncalibrated quantile predictions directly from the model
-            quantile_preds = self._get_uncalibrated_predictions(X)
-        
-        results = []
-        
-        # Add tqdm progress bar
-        for i in tqdm(range(quantile_preds.shape[0]), desc="Generating PDF"):
-            # Use the helper method to get smoothed PDF
-            x_values, pdf_values, _, _ = self._get_smoothed_pdf(
-                quantile_preds, i, num_points=num_points, method=method
-            )
-            
-            results.append((x_values, pdf_values))
-        
-        return results
-    
     def save(self, filepath, format='cbm', compression_level=6):
         """
         Save the trained ProbGBT model to a file.
@@ -1088,7 +914,7 @@ class ProbGBT:
             confidence_levels = [0.5, 0.8, 0.9, 0.95, 0.99]
         
         # Get predictions for all quantiles
-        quantile_preds = self.predict(X_val, return_quantiles=True)
+        quantile_preds = self.predict_raw(X_val)
         
         # For a single sample
         if len(quantile_preds.shape) == 1:
@@ -1128,96 +954,3 @@ class ProbGBT:
         # Return results as DataFrame
         return pd.DataFrame(coverage_results) 
 
-    def predict_distribution(self, X, confidence_levels=None, method='sample_kde', num_points=1000):
-        """
-        Predict both calibrated confidence intervals and a smooth probability distribution.
-        
-        This method provides a complete probabilistic forecast including:
-        1. Calibrated intervals with proper coverage guarantees
-        2. Smooth probability distribution using the same calibrated quantiles
-        
-        Parameters:
-        -----------
-        X : pandas.DataFrame or numpy.ndarray
-            Features to predict on.
-        confidence_levels : list of float, optional
-            List of confidence levels for prediction intervals. If None, uses [0.5, 0.8, 0.9, 0.95, 0.99].
-        method : str, default='sample_kde'
-            Method to use for PDF smoothing ('gmm', 'spline', or 'sample_kde').
-        num_points : int, default=1000
-            Number of points to use for the PDF.
-            
-        Returns:
-        --------
-        dict: A dictionary containing:
-            - 'intervals': A dict mapping confidence levels to (lower_bounds, upper_bounds) tuples
-            - 'pdf': A list of tuples (x_values, pdf_values) for each sample
-            - 'mean': Mean prediction for each sample
-        """
-        if confidence_levels is None:
-            confidence_levels = [0.5, 0.8, 0.9, 0.95, 0.99]
-        
-        results = {}
-        
-        # Get mean predictions
-        results['mean'] = self.predict(X)
-        
-        # Get calibrated intervals for each confidence level
-        intervals = {}
-        
-        # The level=0.95 will trigger computation of PDFs which we'll reuse
-        first_level = confidence_levels[0]
-        lower, upper = self.predict_interval(X, confidence_level=first_level, method=method, num_points=num_points)
-        intervals[first_level] = (lower, upper)
-        
-        # For calibrated models, get the remaining intervals using direct quantile approach
-        # This is more consistent with the calibration guarantees
-        if self.calibrate and self.is_calibrated:
-            for level in confidence_levels[1:]:
-                lower, upper = self.predict_interval(X, confidence_level=level, method=method, num_points=num_points)
-                intervals[level] = (lower, upper)
-        else:
-            # For uncalibrated models, we can use the smoothed PDFs for all intervals
-            # Get PDFs stored from the first predict_interval call
-            pdfs = self._last_pdfs
-            
-            # For each confidence level (except the first one we already computed)
-            for level in confidence_levels[1:]:
-                lower_q = (1 - level) / 2
-                upper_q = 1 - lower_q
-                
-                lower_bounds = []
-                upper_bounds = []
-                
-                # Extract intervals from the stored PDFs
-                for i, (x_values, pdf_values) in enumerate(pdfs):
-                    # Recompute CDF (since it's not stored in _last_pdfs)
-                    cdf_values = cumulative_trapezoid(pdf_values, x_values, initial=0)
-                    
-                    # Normalize CDF to ensure it ends at 1.0
-                    if cdf_values[-1] > 0:
-                        cdf_values /= cdf_values[-1]
-                    
-                    # Find the smallest x value such that CDF(x) >= target_probability
-                    lower_idx = np.searchsorted(cdf_values, lower_q, side='left')
-                    upper_idx = np.searchsorted(cdf_values, upper_q, side='left')
-                    
-                    # Ensure indices are within bounds
-                    lower_idx = max(0, min(lower_idx, len(x_values) - 1))
-                    upper_idx = max(0, min(upper_idx, len(x_values) - 1))
-                    
-                    # Get the x values at those indices
-                    lower_bound = x_values[lower_idx]
-                    upper_bound = x_values[upper_idx]
-                    
-                    lower_bounds.append(lower_bound)
-                    upper_bounds.append(upper_bound)
-                
-                intervals[level] = (np.array(lower_bounds), np.array(upper_bounds))
-        
-        results['intervals'] = intervals
-        
-        # Use the PDFs that were already computed during predict_interval
-        results['pdf'] = self._last_pdfs
-        
-        return results 

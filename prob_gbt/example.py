@@ -6,8 +6,71 @@ import sys
 from sklearn.model_selection import train_test_split
 from matplotlib.gridspec import GridSpec
 from tqdm import tqdm
+from scipy.integrate import cumulative_trapezoid
 # Use relative imports for the package
 from .prob_gbt import ProbGBT
+
+def calculate_median(x_values, cdf_values):
+    """Calculate the median from a CDF."""
+    # Find the median (point where CDF crosses 0.5)
+    median_idx = np.searchsorted(cdf_values, 0.5, side='left')
+    median_idx = max(0, min(median_idx, len(x_values) - 1))
+    return x_values[median_idx]
+
+def calculate_confidence_interval(x_values, cdf_values, confidence_level=0.95):
+    """Calculate confidence interval from a CDF."""
+    lower_q = (1 - confidence_level) / 2
+    upper_q = 1 - lower_q
+    
+    # Find the smallest x value such that CDF(x) >= target_probability
+    lower_idx = np.searchsorted(cdf_values, lower_q, side='left')
+    upper_idx = np.searchsorted(cdf_values, upper_q, side='left')
+    
+    # Ensure indices are within bounds
+    lower_idx = max(0, min(lower_idx, len(x_values) - 1))
+    upper_idx = max(0, min(upper_idx, len(x_values) - 1))
+    
+    # Get the x values at those indices
+    lower_bound = x_values[lower_idx]
+    upper_bound = x_values[upper_idx]
+    
+    return lower_bound, upper_bound
+
+def calculate_intervals_from_raw_quantiles(quantile_predictions, quantiles, confidence_level=0.95):
+    """Calculate confidence intervals directly from raw quantile predictions."""
+    # Calculate the lower and upper quantiles for the confidence interval
+    lower_q = (1 - confidence_level) / 2
+    upper_q = 1 - lower_q
+    
+    # Find the closest available quantiles
+    lower_idx = np.argmin(np.abs(quantiles - lower_q))
+    upper_idx = np.argmin(np.abs(quantiles - upper_q))
+    
+    # If the closest lower quantile is larger than our target, move one index back if possible
+    if quantiles[lower_idx] > lower_q and lower_idx > 0:
+        lower_idx -= 1
+        
+    # If the closest upper quantile is smaller than our target, move one index forward if possible
+    if quantiles[upper_idx] < upper_q and upper_idx < len(quantiles) - 1:
+        upper_idx += 1
+    
+    # Get the predicted values at those quantiles
+    lower_bounds = quantile_predictions[:, lower_idx]
+    upper_bounds = quantile_predictions[:, upper_idx]
+    
+    # Ensure lower bounds are always less than upper bounds
+    swap_indices = np.where(lower_bounds > upper_bounds)[0]
+    if len(swap_indices) > 0:
+        # Swap the values where needed
+        temp = lower_bounds[swap_indices].copy()
+        lower_bounds[swap_indices] = upper_bounds[swap_indices]
+        upper_bounds[swap_indices] = temp
+        
+        # Log warning if bounds were swapped
+        if len(swap_indices) > 0:
+            print(f"Warning: Swapped {len(swap_indices)} lower/upper bounds where lower > upper.")
+    
+    return lower_bounds, upper_bounds
 
 def main():
     # Create images directory if it doesn't exist
@@ -67,7 +130,7 @@ def main():
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=100,
-        iterations=1000,
+        iterations=50,
         subsample=1.0,
         random_seed=1234,
         calibrate=True, 
@@ -85,14 +148,39 @@ def main():
     )
 
     # Define smoothing method for all predictions
-    smoothing_method = 'sample_kde'  # Use GMM smoothing on top of spline for better curves
+    smoothing_method = 'sample_kde'  # Use smoothing method for better curves
 
-    # Make predictions in log space
-    print("\nMaking predictions...")
-    y_pred_log = model.predict(X_test)
+    # First, get the raw quantile predictions for direct interval calculation
+    print("\nGetting raw quantile predictions...")
+    raw_quantile_preds = model.predict_raw(X_test)
+
+    # Then, get distribution predictions (only once) for all test samples
+    print("\nPredicting distributions for all test samples...")
+    distributions = model.predict(X_test, method=smoothing_method)
+    
+    # Calculate metrics and visualizations from the distributions
+    print("\nCalculating metrics from distributions...")
+    
+    # Calculate medians
+    y_pred_log = np.array([calculate_median(x_values, cdf_values) for x_values, _, cdf_values in distributions])
+    
+    # Calculate 95% confidence intervals using direct quantile approach (more accurate for calibrated models)
+    if model.calibrate and model.is_calibrated:
+        print("Using direct quantile approach for confidence intervals...")
+        lower_bounds_log, upper_bounds_log = calculate_intervals_from_raw_quantiles(
+            raw_quantile_preds, model.quantiles, confidence_level=0.95)
+    else:
+        # Calculate from PDFs if not calibrated
+        print("Calculating confidence intervals from PDFs...")
+        intervals = [calculate_confidence_interval(x_values, cdf_values, 0.95) 
+                    for x_values, _, cdf_values in distributions]
+        lower_bounds_log = np.array([lower for lower, _ in intervals])
+        upper_bounds_log = np.array([upper for _, upper in intervals])
     
     # Convert predictions back to original scale
     y_pred = np.expm1(y_pred_log)
+    lower_bounds = np.expm1(lower_bounds_log)
+    upper_bounds = np.expm1(upper_bounds_log)
     
     # Calculate RMSE and MAE for the point predictions on original scale
     rmse = np.sqrt(np.mean((y_raw_test - y_pred) ** 2))
@@ -100,15 +188,17 @@ def main():
     print(f"Point predictions from PDF median (back-transformed):")
     print(f"Root Mean Squared Error (RMSE): {rmse:.2f}")
     print(f"Mean Absolute Error (MAE): {mae:.2f}")
+    
+    # Evaluate calibration quality
+    print("\nEvaluating calibration quality...")
+    calibration_results = model.evaluate_calibration(X_test, y_test)
+    print(calibration_results)
+    
+    # Calculate coverage from intervals (using the direct interval method)
+    print("\nCalculating confidence interval coverage...")
+    coverage = np.mean((y_raw_test >= lower_bounds) & (y_raw_test <= upper_bounds))
+    print(f"95% Confidence Interval Coverage: {coverage:.2%}")
 
-    # Predict confidence intervals in log space
-    print("\nPredicting confidence intervals...")
-    lower_bounds_log, upper_bounds_log = model.predict_interval(X_test, confidence_level=0.95, method=smoothing_method)
-    
-    # Transform bounds back to original scale
-    lower_bounds = np.expm1(lower_bounds_log)
-    upper_bounds = np.expm1(upper_bounds_log)
-    
     # Plot predictions vs actual for a subset of test samples
     print("\nPlotting predictions vs actual values...")
     sample_indices = np.random.choice(len(y_raw_test), size=10, replace=False)
@@ -133,8 +223,8 @@ def main():
     print("\nPlotting probability density function for a single example...")
     sample_idx = sample_indices[0]
     
-    pdfs_log = model.predict_pdf(X_test.iloc[[sample_idx]], method=smoothing_method)
-    x_values_log, pdf_values_log = pdfs_log[0]
+    # Get the distribution for this single example (already calculated earlier)
+    x_values_log, pdf_values_log, _ = distributions[sample_idx]
     
     # Transform x-values back to original scale
     x_values = np.expm1(x_values_log)
@@ -182,9 +272,8 @@ def main():
     
     # Plot each distribution separately with correct data
     for i, idx in enumerate(diverse_indices):
-        # Get PDF for this specific sample
-        sample_pdfs_log = model.predict_pdf(X_test.iloc[[idx]], method=smoothing_method)
-        x_vals_log, pdf_vals_log = sample_pdfs_log[0]
+        # Get the already calculated distribution for this specific sample
+        x_vals_log, pdf_vals_log, _ = distributions[idx]
         
         # Transform x-values back to original scale
         x_vals = np.expm1(x_vals_log)
@@ -192,7 +281,7 @@ def main():
         # Adjust PDF values for the change of variable
         pdf_vals = pdf_vals_log / (1 + x_vals)
         
-        # Get prediction for this sample
+        # Get prediction for this sample (already calculated)
         pred_val = y_pred[idx]
         
         # Plot the distribution and vertical lines
@@ -318,73 +407,99 @@ def main():
     plt.savefig('./images/feature_uncertainty.png', dpi=300, bbox_inches='tight')
     print("Saved feature importance and uncertainty plot to ./images/feature_uncertainty.png")
     
-    # Calculate coverage from intervals (using the direct interval method)
-    print("\nCalculating confidence interval coverage...")
-    coverage = np.mean((y_raw_test >= lower_bounds) & (y_raw_test <= upper_bounds))
-    print(f"95% Confidence Interval Coverage: {coverage:.2%}")
-    
-    # 4. Calibration plot - checking if confidence intervals are well-calibrated
-    print("\nCreating calibration plot for confidence intervals...")
+    # 4. Enhanced calibration plot with detailed metrics
+    print("\nCreating enhanced calibration plot with metrics...")
     # Create confidence levels array with 0.95 included exactly
     confidence_levels_1 = np.linspace(0.1, 0.94, 15)
     confidence_levels_2 = np.linspace(0.96, 0.99, 4)
     confidence_levels = np.concatenate([confidence_levels_1, np.array([0.95]), confidence_levels_2])
     observed_coverages = []
+    ci_widths_by_level = []
     
-    # Use tqdm for a single progress bar, with no extra print output
+    # Create a figure for the enhanced calibration plot
+    plt.figure(figsize=(12, 10))
+    
+    # Create two subplots: calibration curve and width vs. confidence level
+    gs = GridSpec(2, 1, height_ratios=[2, 1])
+    ax1 = plt.subplot(gs[0])
+    ax2 = plt.subplot(gs[1])
+    
+    # Use the calibration results from model.evaluate_calibration for key confidence levels
+    # and use direct calculation for the rest
+    
+    # First, compute a more detailed calibration curve for visualization
     print("Calculating coverage for different confidence levels...")
     for conf_level in tqdm(confidence_levels, desc="Evaluating confidence levels"):
-        # Get interval bounds for this confidence level using the same method
-        lower_log, upper_log = model.predict_interval(X_test, confidence_level=conf_level, method=smoothing_method)
+        # For each confidence level, calculate intervals
+        if model.calibrate and model.is_calibrated:
+            # Use the direct quantile approach
+            lower_log, upper_log = calculate_intervals_from_raw_quantiles(
+                raw_quantile_preds, model.quantiles, confidence_level=conf_level)
+        else:
+            # Calculate from PDFs
+            intervals = [calculate_confidence_interval(x_values, cdf_values, conf_level) 
+                        for x_values, _, cdf_values in distributions]
+            lower_log = np.array([lower for lower, _ in intervals])
+            upper_log = np.array([upper for _, upper in intervals])
         
         # Transform bounds back to original scale
         lower = np.expm1(lower_log)
         upper = np.expm1(upper_log)
         
-        # Calculate coverage
+        # Calculate coverage and average width
         coverage = np.mean((y_raw_test >= lower) & (y_raw_test <= upper))
-        print(f"Coverage for {conf_level:.2f}: {coverage:.2%}")
+        avg_width = np.mean(upper - lower)
+        
+        print(f"Coverage for {conf_level:.2f}: {coverage:.2%}, Avg. width: {avg_width:.2f}")
         observed_coverages.append(coverage)
+        ci_widths_by_level.append(avg_width)
     
-    plt.figure(figsize=(10, 6))
-    plt.plot(confidence_levels, observed_coverages, 'o-', label='Observed coverage')
-    plt.plot([0, 1], [0, 1], 'k--', label='Ideal calibration')
+    # Main calibration curve
+    ax1.plot(confidence_levels, observed_coverages, 'o-', label='Observed coverage')
+    ax1.plot([0, 1], [0, 1], 'k--', label='Ideal calibration')
     
     # Add vertical line at 95% confidence level
-    plt.axvline(x=0.95, color='r', linestyle='--', alpha=0.7, label='95% confidence level')
+    ax1.axvline(x=0.95, color='r', linestyle='--', alpha=0.7, label='95% confidence level')
     
     # Find the observed coverage at 95% confidence level (or closest to it)
     idx_95 = np.abs(confidence_levels - 0.95).argmin()
     coverage_at_95 = observed_coverages[idx_95]
     
     # Add horizontal line from the 95% point to the y-axis
-    plt.plot([0, 0.95], [coverage_at_95, coverage_at_95], 'r--', alpha=0.7)
+    ax1.plot([0, 0.95], [coverage_at_95, coverage_at_95], 'r--', alpha=0.7)
     
     # Add annotation for the 95% coverage value
-    plt.annotate(f'Coverage: {coverage_at_95:.2%}', 
-                 xy=(0.95, coverage_at_95),
-                 xytext=(0.7, coverage_at_95 - 0.05),
-                 arrowprops=dict(facecolor='red', shrink=0.05, width=1.5, headwidth=8),
-                 fontsize=10,
-                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.7))
+    ax1.annotate(f'Coverage: {coverage_at_95:.2%}', 
+                xy=(0.95, coverage_at_95),
+                xytext=(0.7, coverage_at_95 - 0.05),
+                arrowprops=dict(facecolor='red', shrink=0.05, width=1.5, headwidth=8),
+                fontsize=10,
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.7))
     
-    plt.xlabel('Expected Coverage (Confidence Level)')
-    plt.ylabel('Observed Coverage')
-    plt.title('Calibration Plot for Confidence Intervals')
+    ax1.set_xlabel('Expected Coverage (Confidence Level)')
+    ax1.set_ylabel('Observed Coverage')
+    ax1.set_title('Calibration Plot for Confidence Intervals')
     
     # Add finer grid
-    plt.grid(True, which='major', linestyle='-', linewidth=0.8, alpha=0.7)
-    plt.grid(True, which='minor', linestyle=':', linewidth=0.5, alpha=0.5)
-    plt.minorticks_on()
+    ax1.grid(True, which='major', linestyle='-', linewidth=0.8, alpha=0.7)
+    ax1.grid(True, which='minor', linestyle=':', linewidth=0.5, alpha=0.5)
+    ax1.minorticks_on()
     
     # Set axis limits for better visualization
-    plt.xlim(0, 1.05)
-    plt.ylim(0, 1.05)
+    ax1.set_xlim(0, 1.05)
+    ax1.set_ylim(0, 1.05)
+    ax1.legend(loc='lower right')
     
-    plt.legend(loc='lower right')
+    # Plot average CI width vs. confidence level
+    ax2.plot(confidence_levels, ci_widths_by_level, 'o-', color='green')
+    ax2.set_xlabel('Confidence Level')
+    ax2.set_ylabel('Avg. CI Width')
+    ax2.set_title('Average Confidence Interval Width by Confidence Level')
+    ax2.grid(True)
+    
     plt.tight_layout()
-    plt.savefig('./images/calibration_plot.png', dpi=300, bbox_inches='tight')
-    print("Saved calibration plot to ./images/calibration_plot.png")
+    plt.savefig('./images/enhanced_calibration_plot.png', dpi=300, bbox_inches='tight')
+    print("Saved enhanced calibration plot to ./images/enhanced_calibration_plot.png")
 
     print("\nExample completed. Check the generated plots in the images directory.")
 

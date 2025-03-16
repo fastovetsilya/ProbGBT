@@ -155,32 +155,8 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
    - The first approach ensures consistency between quantiles and improves computational efficiency
    - The second approach may provide more flexibility for complex distributions
 
-3. **Quantile Function Smoothing**:
-   - Raw quantile predictions can be noisy and may not form a proper monotonically increasing function
-   - A Generalized Additive Model (GAM) with monotonicity constraints is fitted to the predicted quantiles:
-     ```python
-     gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(quantiles, y_pred_sample)
-     ```
-   - This creates a smooth, monotonically increasing quantile function
-
-4. **PDF Calculation**:
-   - The PDF is computed as the derivative of the quantile function with respect to the probability
-   - Mathematically, if Q(p) is the quantile function, then PDF(y) = 1/Q'(F(y)) where F is the CDF
-   - In code, this is approximated using numerical differentiation:
-     ```python
-     pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
-     ```
-   - The small epsilon value (1e-10) prevents division by zero in flat regions
-
-5. **PDF Normalization**:
-   - The resulting PDF is normalized to ensure it integrates to 1.0, making it a valid probability density function:
-     ```python
-     pdf_smooth /= np.trapz(pdf_smooth, y_pred_smooth)
-     ```
-   - This uses the trapezoidal rule for numerical integration
-
-6. **Comparison of PDF Smoothing Methods**:
-   ProbGBT offers three methods for smoothing the quantile predictions into PDFs, each with different characteristics:
+3. **PDF Generation Methods**:
+   ProbGBT offers three methods for transforming quantile predictions into PDFs, each with different characteristics:
    
    - **Sample-based KDE (`sample_kde`)**: The default method
      - Fully nonparametric approach that makes no assumptions about the distribution shape
@@ -288,29 +264,12 @@ ProbGBT(
 
 - `train(X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True, calibration_set=None, calibration_size=0.2)`: Train the model
 - `predict_raw(X)`: Get raw quantile predictions (with calibration applied if enabled)
-- `predict(X, method='sample_kde', num_points=1000)`: Predict probability density functions and CDFs for the given samples
+- `predict(X, method='sample_kde', num_points=1000)`: Predict probability density functions and CDFs for the given samples. Returns a list of tuples: `[(x_values, pdf_values, cdf_values), ...]` for each sample, providing both PDF and CDF in a single call.
 - `evaluate_calibration(X_val, y_val, confidence_levels=None)`: Evaluate calibration quality on validation data
 - `save(filepath, format='cbm', compression_level=6)`: Save the trained model to a file
 - `load(filepath, format='cbm')`: Load a saved model from a file
 
-**Note:** The following methods have been removed in the newest version, as their functionality is now integrated directly into the predict() method combined with helper functions:
-- `predict_interval`: Use predict() and calculate confidence intervals from the returned CDFs
-- `predict_pdf`: Use predict() directly
-- `predict_distribution`: Use predict() and calculate statistics from the returned distributions
-
-> **API Changes in v2.0**
-> 
-> The ProbGBT API has been refactored to be more efficient and flexible:
->
-> 1. The `predict()` method now returns a list of tuples: `[(x_values, pdf_values, cdf_values), ...]` for each sample, providing both PDF and CDF in a single call.
-> 
-> 2. The `predict_raw()` method returns the raw quantile predictions (with calibration applied if enabled). For calibrated models, getting confidence intervals directly from these raw quantiles is more accurate.
->
-> 3. Statistics and intervals are calculated from the distributions rather than making separate API calls. This approach is more efficient because it computes the distribution only once.
->
-> 4. The default smoothing method is now `sample_kde`, which produces higher quality PDFs, especially for complex distributions.
->
-> See the examples above for how to calculate medians and confidence intervals using the new API.
+**Note:** Statistics and intervals are calculated from the distributions returned by the `predict()` method. This approach is more efficient because it computes the distribution only once.
 
 ### Save and Load Functionality
 

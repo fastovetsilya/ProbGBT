@@ -112,12 +112,12 @@ pip install -r requirements.txt
 # Using Poetry (recommended)
 poetry run example           # Run the main example with plots
 poetry run example-save-load # Run the save/load example
-poetry run example-geospacial # Run the geospatial visualization example
+poetry run example-geospatial # Run the geospatial visualization example
 
 # Alternative: Running files directly
 python prob_gbt/examples/example.py
 python prob_gbt/examples/example_save_load.py
-python prob_gbt/examples/example_geospacial.py
+python prob_gbt/examples/example_geospatial.py
 ```
 
 This will:

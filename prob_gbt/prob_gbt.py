@@ -311,8 +311,10 @@ class ProbGBT:
                 
                 # Handle extreme quantiles carefully
                 if q < 0.01:
-                    # For very low quantiles, be conservative
-                    s_hat = np.min(scores)
+                    # For very low quantiles, use a small quantile instead of min
+                    # This avoids creating a discontinuity in the adjustment
+                    small_q = 0.001  # Use a small quantile instead of minimum
+                    s_hat = np.quantile(scores, small_q)
                 elif q > 0.99:
                     # For very high quantiles, be conservative
                     s_hat = np.max(scores)

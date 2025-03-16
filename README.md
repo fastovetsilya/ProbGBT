@@ -239,27 +239,27 @@ The calibration process ensures that the model's uncertainty predictions are sta
 
 ```python
 ProbGBT(
-    num_quantiles=50,
-    iterations=500,
+    num_quantiles=100,
+    iterations=1000,
     learning_rate=None,
     depth=None,
     subsample=1.0,
-    random_seed=42,
+    random_seed=None,
     train_separate_models=False,
-    calibrate=False
+    calibrate=True
 )
 ```
 
 #### Parameters:
 
-- `num_quantiles`: Number of quantiles to predict (default: 50)
-- `iterations`: Maximum number of trees to build (default: 500)
+- `num_quantiles`: Number of quantiles to predict (default: 100)
+- `iterations`: Maximum number of trees to build (default: 1000)
 - `learning_rate`: Learning rate for the gradient boosting algorithm (default: None, uses CatBoost default)
 - `depth`: Depth of the trees (default: None, uses CatBoost default)
 - `subsample`: Subsample ratio of the training instances (default: 1.0)
-- `random_seed`: Random seed for reproducibility (default: 42)
+- `random_seed`: Random seed for reproducibility (default: None)
 - `train_separate_models`: If True, train separate models for each quantile instead of using MultiQuantile loss (default: False)
-- `calibrate`: If True, use conformal prediction to calibrate predicted quantiles (default: False)
+- `calibrate`: If True, use conformal prediction to calibrate predicted quantiles (default: True)
 
 #### Methods:
 

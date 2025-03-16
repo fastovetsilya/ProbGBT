@@ -73,6 +73,30 @@ The calibration analysis is crucial for assessing the reliability of the model's
 
 ProbGBT's conformal calibration mechanism aims to ensure that the calibration curve stays close to the diagonal, providing statistically valid uncertainty estimates.
 
+### Geospatial Probabilistic Predictions
+
+ProbGBT provides fully nonparametric probabilistic predictions for geospatial data, enabling smooth uncertainty quantification across geographic regions. Below is an example with California housing prices where the model is trained using only latitude and longitude as features:
+
+<table>
+  <tr>
+    <td><img src="prob_gbt/examples/images/california_prices_map.png" alt="Predicted House Prices Map" width="100%"/></td>
+    <td><img src="prob_gbt/examples/images/california_uncertainty_map.png" alt="Prediction Uncertainty Map" width="100%"/></td>
+  </tr>
+  <tr>
+    <td><img src="prob_gbt/examples/images/california_absolute_uncertainty_map.png" alt="Absolute Uncertainty Map" width="100%"/></td>
+    <td><img src="prob_gbt/examples/images/california_combined_map.png" alt="Combined Visualization" width="100%"/></td>
+  </tr>
+</table>
+
+*Top left: Geographic distribution of predicted house prices across California.*
+
+*Top right: Relative uncertainty (95% CI width / predicted price) showing which regions have more uncertain predictions.*
+
+*Bottom left: Absolute uncertainty (95% CI width in dollars) highlighting areas with the widest prediction intervals.*
+
+*Bottom right: Combined visualization showing all three metrics for easier comparison.*
+
+
 ## Quick Start
 
 ### Installation
@@ -91,10 +115,12 @@ pip install -r requirements.txt
 # Using Poetry (recommended)
 poetry run example           # Run the main example with plots
 poetry run example-save-load # Run the save/load example
+poetry run example-geospacial # Run the geospatial visualization example
 
 # Alternative: Running files directly
 python prob_gbt/examples/example.py
 python prob_gbt/examples/example_save_load.py
+python prob_gbt/examples/example_geospacial.py
 ```
 
 This will:

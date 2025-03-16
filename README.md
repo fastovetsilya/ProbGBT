@@ -1,6 +1,6 @@
 # ProbGBT: Probabilistic Gradient Boosted Trees
 
-ProbGBT is a probabilistic machine learning model that extends gradient boosted trees to provide uncertainty estimates. It uses CatBoost's MultiQuantile loss function to predict multiple quantiles of the target distribution, then constructs a probability density function (PDF) from these quantiles.
+ProbGBT is a fully nonparametric probabilistic machine learning model that extends gradient boosted trees to provide uncertainty estimates. It uses CatBoost's MultiQuantile loss function to predict multiple quantiles of the target distribution, then constructs a probability density function (PDF) from these quantiles without making any assumptions about the underlying distribution shape.
 
 ## Features
 
@@ -273,7 +273,7 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
 1. **Non-uniform Quantile Generation**: 
    - Instead of using uniformly spaced quantiles, ProbGBT transforms them using the normal distribution's PPF (Percent Point Function) and CDF (Cumulative Distribution Function)
    - This places more focus on the tails of the distribution, improving the model's ability to capture extreme values
-   - The transformation uses: `non_uniform_quantiles = norm.cdf(norm.ppf(uniform_quantiles) * 3)`
+   - The transformation uses: `non_uniform_quantiles = norm.cdf(norm.ppf(uniform_quantiles) * 1.5)`
 
 2. **Quantile Prediction with CatBoost**:
    - The model can use either:
@@ -306,46 +306,36 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
      ```
    - This uses the trapezoidal rule for numerical integration
 
-6. **Sample-based KDE Smoothing (Default)**:
-   - ProbGBT's default smoothing method (`sample_kde`) uses a different approach that combines sampling and Kernel Density Estimation
-   - The process works as follows:
-     1. Generate random uniform samples in the probability space between 0 and 1:
-        ```python
-        prob_samples = np.random.uniform(0, 1, n_samples)
-        ```
-     2. Transform these samples into the target variable space by interpolating from the predicted quantiles:
-        ```python
-        samples = np.interp(prob_samples, self.quantiles, y_pred_sample)
-        ```
-     3. Apply Kernel Density Estimation (KDE) to these samples to get a smooth PDF:
-        ```python
-        kde = KernelDensity(bandwidth='silverman', kernel='gaussian')
-        kde.fit(samples)
-        pdf_values = np.exp(kde.score_samples(x_values))
-        ```
-     4. Normalize the PDF and compute the CDF using numerical integration:
-        ```python
-        pdf_values = pdf_values / np.trapz(pdf_values, x_values.ravel())
-        cdf_values = cumulative_trapezoid(pdf_values, x_values.ravel(), initial=0)
-        ```
-   - This method has several advantages:
-     - Produces smoother distributions than direct differentiation of the quantile function
-     - Better captures complex shapes including multi-modality
-     - More robust to noise in the predicted quantiles
-     - Automatically adapts to the data density in different regions
-   - The 'silverman' rule for bandwidth selection automatically determines an appropriate smoothing level based on the data
+6. **Comparison of PDF Smoothing Methods**:
+   - ProbGBT offers three methods for smoothing the quantile predictions into PDFs, each with different characteristics:
+   
+   - **Sample-based KDE (`sample_kde`)**: The default method
+     - Fully nonparametric approach that makes no assumptions about the distribution shape
+     - Generates samples from the empirical CDF and applies Kernel Density Estimation
+     - Produces the most flexible and accurate representations of complex distributions
+     - Can effectively capture multi-modal distributions and asymmetric tails
+     - Most computationally intensive method (slowest)
+   
+   - **Spline-based smoothing (`spline`)**:
+     - Nonparametric approach that directly smooths the quantile function using GAMs
+     - Fits a Generalized Additive Model with monotonicity constraints
+     - Fastest method with lowest computational overhead
+     - May produce peaky or irregular distributions in some cases
+     - Used as a fallback method when other methods fail
+     - When GMM is selected but fails to converge, spline results are used instead
+   
+   - **Gaussian Mixture Model (`gmm`)**:
+     - Semi-parametric approach that combines spline smoothing with Gaussian mixtures
+     - First applies spline-based smoothing, then fits a mixture of Gaussian distributions
+     - Provides a good balance between flexibility and smoothness
+     - Moderate computational cost (between `spline` and `sample_kde` in terms of speed)
+     - Produces smoother distributions than the spline method
+     - May not capture extremely complex distributions as well as `sample_kde`
 
-7. **Gaussian Mixture Model (GMM) Smoothing**:
-   - In addition to spline-based and sample-based KDE smoothing, ProbGBT offers an optional GMM-based smoothing method
-   - GMM fits a mixture of Gaussian distributions to the data, providing a more robust representation for complex distributions
-   - This can be enabled by setting `method='gmm'` in the `predict_pdf()` or `predict_interval()` functions:
-     ```python
-     pdfs = model.predict_pdf(X_test, method='gmm')
-     lower, upper = model.predict_interval(X_test, confidence_level=0.95, method='gmm')
-     ```
-   - GMM smoothing can better capture multi-modal distributions and provides smoother estimates
-   - The implementation uses scikit-learn's GaussianMixture with 3 components by default
-   - The model includes sophisticated failure detection to fall back to spline smoothing when GMM fails to converge or produces unreliable distributions
+   The choice of smoothing method depends on your specific needs:
+      - Use `sample_kde` (default) for the most accurate representation when computational cost is not a concern
+      - Use `spline` for the fastest performance when dealing with large datasets
+      - Use `gmm` for a good balance between smooth distributions and reasonable performance
 
 ### Calibration Process
 

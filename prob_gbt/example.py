@@ -142,12 +142,15 @@ def main():
         y_train, 
         cat_features=cat_features, 
         eval_set=(X_val, y_val), 
-        calibration_set=None, 
+        calibration_set=None, # Automatically uses 20% of training data
         use_best_model=True, 
         verbose=True
     )
 
     # Define smoothing method: sample_kde (default), spline, gmm
+    # sample_kde (recommended): fully nonparametric, slowest
+    # spline: direct nonparametric fit for cdf with differentiation, fastest but peaky distributions
+    # gmm: Gaussian Mixture Model, smooth and flexible, semi-parametric, fit above spline
     smoothing_method = 'sample_kde'
 
     # First, get the raw quantile predictions for direct interval calculation

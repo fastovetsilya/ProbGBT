@@ -23,11 +23,11 @@ class ProbGBT:
     
     def __init__(self, 
                  num_quantiles=100, 
-                 iterations=500,
+                 iterations=1000,
                  learning_rate=None, 
                  depth=None,
                  subsample=1.0,
-                 random_seed=42,
+                 random_seed=None,
                  train_separate_models=False,
                  calibrate=True):
         """
@@ -35,7 +35,7 @@ class ProbGBT:
         
         Parameters:
         -----------
-        num_quantiles : int, default=50
+        num_quantiles : int, default=100
             Number of quantiles to predict.
         iterations : int, default=1000
             Maximum number of trees to build.
@@ -45,11 +45,11 @@ class ProbGBT:
             Depth of the trees.
         subsample : float, default=1.0
             Subsample ratio of the training instances.
-        random_seed : int, default=42
+        random_seed : int, default=None
             Random seed for reproducibility.
         train_separate_models : bool, default=False
             If True, train separate models for each quantile instead of using MultiQuantile loss.
-        calibrate : bool, default=False
+        calibrate : bool, default=True
             If True, use conformal prediction to calibrate predicted quantiles.
         """
         self.num_quantiles = num_quantiles
@@ -80,7 +80,7 @@ class ProbGBT:
         uniform_quantiles = np.linspace(0.01, 0.99, self.num_quantiles)
         
         # Transform using normal distribution's PPF and CDF to focus more on the tails
-        non_uniform_quantiles = norm.cdf(norm.ppf(uniform_quantiles) * 3)
+        non_uniform_quantiles = norm.cdf(norm.ppf(uniform_quantiles) * 1.5)
         
         # Ensure values are within [0,1]
         non_uniform_quantiles = np.clip(non_uniform_quantiles, 0, 1)

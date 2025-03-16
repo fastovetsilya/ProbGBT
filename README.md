@@ -89,13 +89,12 @@ pip install -r requirements.txt
 
 ```bash
 # Using Poetry (recommended)
-poetry run python examples/run_example.py
+poetry run example           # Run the main example with plots
+poetry run example-save-load # Run the save/load example
 
-# Or, if configured in pyproject.toml
-poetry run run-example
-
-# Alternative: Using Python directly
-python examples/run_example.py
+# Alternative: Running files directly
+python prob_gbt/examples/example.py
+python prob_gbt/examples/example_save_load.py
 ```
 
 This will:

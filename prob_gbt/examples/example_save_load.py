@@ -6,8 +6,14 @@ import sys
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-# Use relative imports for the package
-from ..prob_gbt import ProbGBT
+# Handle imports for both direct run and package import
+if __name__ == "__main__":
+    # When run directly, add parent to path and use absolute import
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+    from prob_gbt.prob_gbt import ProbGBT
+else:
+    # When imported as a module by Poetry, use relative import
+    from ..prob_gbt import ProbGBT
 
 def main():
     # Create output directory if it doesn't exist
@@ -203,6 +209,4 @@ def main():
     print(f"A comparison plot was saved to '{plot_path}'")
 
 if __name__ == "__main__":
-    # Add the parent directory to the path to make imports work when run directly
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     main()

@@ -21,7 +21,8 @@ matplotlib = "^3.8.3"
 ipykernel = "^6.29.5"
 
 [tool.poetry.scripts]
-run-example = "prob_gbt.example:main"
+example = "prob_gbt.examples.example:main"
+example-save-load = "prob_gbt.examples.example_save_load:main"
 
 [build-system]
 requires = ["poetry-core"]

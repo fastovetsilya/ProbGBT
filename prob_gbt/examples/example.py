@@ -7,6 +7,7 @@ from sklearn.model_selection import train_test_split
 from matplotlib.gridspec import GridSpec
 from tqdm import tqdm
 from scipy.integrate import cumulative_trapezoid
+from scipy.stats import norm, lognorm
 
 # Handle imports for both direct run and package import
 if __name__ == "__main__":
@@ -247,8 +248,20 @@ def main():
     # where d/dy(log1p(y)) = 1/(1+y)
     pdf_values = pdf_values_log / (1 + x_values)
     
+    # Fit a log-normal distribution (which is appropriate for positive-only data)
+    # First calculate mean and std of the log-transformed data (log1p space)
+    weights = pdf_values_log / np.sum(pdf_values_log)
+    log_mean = np.sum(x_values_log * weights)
+    log_std = np.sqrt(np.sum(weights * (x_values_log - log_mean)**2))
+    
+    # Generate log-normal distribution PDF values in original space
+    normal_pdf = lognorm.pdf(x_values, s=log_std, scale=np.exp(log_mean))
+    # Scale to match the predicted PDF area
+    normal_pdf_scaled = normal_pdf * (np.sum(pdf_values) / np.sum(normal_pdf))
+    
     plt.figure(figsize=(10, 6))
     plt.plot(x_values, pdf_values, label='Predicted PDF')
+    plt.plot(x_values, normal_pdf_scaled, 'k--', label='Log-Normal Fit')
     plt.axvline(x=y_raw_test[sample_idx], color='r', linestyle='--', label='Actual value')
     plt.axvline(x=y_pred[sample_idx], color='g', linestyle='--', label='Predicted value')
     plt.fill_between(x_values, pdf_values, 
@@ -305,8 +318,20 @@ def main():
         # Get prediction for this sample (already calculated)
         pred_val = y_pred[idx]
         
+        # Fit a log-normal distribution for comparison
+        # First calculate mean and std of the log-transformed data
+        weights = pdf_vals_log / np.sum(pdf_vals_log)
+        log_mean = np.sum(x_vals_log * weights)
+        log_std = np.sqrt(np.sum(weights * (x_vals_log - log_mean)**2))
+        
+        # Generate log-normal distribution PDF values in original space
+        normal_pdf = lognorm.pdf(x_vals, s=log_std, scale=np.exp(log_mean))
+        # Scale to match the predicted PDF area
+        normal_pdf_scaled = normal_pdf * (np.sum(pdf_vals) / np.sum(normal_pdf))
+        
         # Plot the distribution and vertical lines
         axes[i].plot(x_vals, pdf_vals, label='PDF')
+        axes[i].plot(x_vals, normal_pdf_scaled, 'k--', label='Log-Normal Fit')
         axes[i].axvline(x=y_raw_test[idx], color='r', linestyle='--', label='Actual')
         axes[i].axvline(x=pred_val, color='g', linestyle='--', label='Predicted')
         

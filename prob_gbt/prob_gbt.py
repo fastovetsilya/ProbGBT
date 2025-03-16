@@ -9,6 +9,7 @@ from scipy.stats import norm
 from scipy.integrate import cumulative_trapezoid
 from pygam import LinearGAM, s
 from sklearn.mixture import GaussianMixture
+from sklearn.neighbors import KernelDensity
 from tqdm import tqdm
 
 class ProbGBT:
@@ -28,7 +29,7 @@ class ProbGBT:
                  subsample=1.0,
                  random_seed=42,
                  train_separate_models=False,
-                 calibrate=False):
+                 calibrate=True):
         """
         Initialize the ProbGBT model.
         
@@ -263,7 +264,7 @@ class ProbGBT:
         if verbose:
             print("Calibration completed successfully.")
     
-    def predict(self, X, return_quantiles=False):
+    def predict(self, X, return_quantiles=False, method='sample_kde', num_points=1000):
         """
         Predict the target values for the given samples.
         
@@ -273,6 +274,13 @@ class ProbGBT:
             Features to predict on.
         return_quantiles : bool, default=False
             Whether to return the predictions for all quantiles.
+        method : str, default='sample_kde'
+            Method to use for PDF smoothing:
+            - 'spline': Original method using GAM smoothing only
+            - 'gmm': Kernel Density Estimation applied on top of spline smoothing
+            - 'sample_kde': Sample from empirical CDF and apply KDE smoothing (default)
+        num_points : int, default=1000
+            Number of points to use for the PDF.
             
         Returns:
         --------
@@ -323,23 +331,11 @@ class ProbGBT:
         if return_quantiles:
             return quantile_preds
         
-        # OPTION 1: Simple direct quantile approach (original method)
-        # Return direct 0.5 quantile prediction
-        median_idx = np.searchsorted(self.quantiles, 0.5)
-        if median_idx >= len(self.quantiles):
-            median_idx = len(self.quantiles) - 1
-        
-        # For consistency with the PDF shown in visualizations, we should use
-        # the median from the smoothed distribution, not the direct 0.5 quantile
-        
-        # OPTION 2: Calculate true median from smoothed PDF for each sample (more accurate)
-        # This ensures the prediction matches the median of the distribution shown in visualizations
+        # Calculate median predictions using the specified smoothing method
         medians = []
-        method = 'spline'  # Use the same method as in visualizations
-        num_points = 1000
         
         for i in tqdm(range(quantile_preds.shape[0]), desc="Calculating medians"):
-            # Get smoothed PDF and CDF
+            # Get smoothed PDF and CDF using the specified method
             x_values, pdf_values, cdf_values, _ = self._get_smoothed_pdf(
                 quantile_preds, i, num_points=num_points, method=method
             )
@@ -352,7 +348,7 @@ class ProbGBT:
         
         return np.array(medians)
     
-    def _get_smoothed_pdf(self, quantile_preds, i, num_points=1000, method='spline'):
+    def _get_smoothed_pdf(self, quantile_preds, i, num_points=1000, method='sample_kde'):
         """
         Helper method to compute smoothed PDF for a single sample.
         
@@ -364,8 +360,11 @@ class ProbGBT:
             Index of the sample in quantile_preds to process.
         num_points : int, default=1000
             Number of points to use for the PDF.
-        method : str, default='gmm'
-            Method to use for PDF smoothing ('gmm' or 'spline').
+        method : str, default='sample_kde'
+            Method to use for PDF smoothing:
+            - 'spline': Original method using GAM smoothing only
+            - 'gmm': Kernel Density Estimation applied on top of spline smoothing
+            - 'sample_kde': Sample from empirical CDF and apply KDE smoothing (default)
             
         Returns:
         --------
@@ -377,6 +376,49 @@ class ProbGBT:
         """
         # Get the predicted quantiles for this sample
         y_pred_sample = quantile_preds[i]
+        
+        if method == 'sample_kde':
+            # Determine the range directly from the quantile predictions
+            y_min, y_max = np.min(y_pred_sample), np.max(y_pred_sample)
+            y_range = y_max - y_min
+            
+            # Add padding to the range to avoid edge effects
+            y_min -= 0.2 * y_range
+            y_max += 0.2 * y_range
+            
+            # Generate random uniform samples for probability values
+            np.random.seed(self.random_seed)  # For reproducibility
+            n_samples = num_points  # Number of samples to draw (same as num_points)
+            prob_samples = np.random.uniform(0, 1, n_samples)
+            
+            # Interpolate to get samples from the empirical CDF
+            samples = np.interp(prob_samples, self.quantiles, y_pred_sample)
+            
+            # Reshape samples for KDE
+            samples = samples.reshape(-1, 1)
+            
+            # Fit KDE and get smoothed PDF
+            kde = KernelDensity(bandwidth='silverman', kernel='gaussian')
+            kde.fit(samples)
+            
+            # Generate points for PDF evaluation
+            x_values = np.linspace(y_min, y_max, num_points).reshape(-1, 1)
+            log_pdf = kde.score_samples(x_values)
+            pdf_values = np.exp(log_pdf)
+            
+            # Normalize PDF
+            pdf_values = pdf_values / np.trapz(pdf_values, x_values.ravel())
+            
+            # Compute CDF using numerical integration
+            cdf_values = cumulative_trapezoid(pdf_values, x_values.ravel(), initial=0)
+            
+            # Ensure CDF ends at 1.0
+            cdf_values /= cdf_values[-1]
+            
+            # Create quantiles_smooth for API consistency
+            quantiles_smooth = np.linspace(0, 1, num_points)
+            
+            return x_values.ravel(), pdf_values, cdf_values, quantiles_smooth
         
         if method == 'spline':
             # Original method using GAM smoothing
@@ -539,9 +581,9 @@ class ProbGBT:
             return x_values, pdf_values, cdf_values, quantiles_smooth
         
         else:
-            raise ValueError(f"Unknown method: {method}. Choose from 'spline' or 'gmm'.")
+            raise ValueError(f"Unknown method: {method}. Choose from 'spline', 'gmm', or 'sample_kde'.")
 
-    def predict_interval(self, X, confidence_level=0.95, method='spline', num_points=1000):
+    def predict_interval(self, X, confidence_level=0.95, method='sample_kde', num_points=1000):
         """
         Predict confidence intervals for the given samples using the smoothed PDF.
         
@@ -551,8 +593,8 @@ class ProbGBT:
             Features to predict on.
         confidence_level : float, default=0.95
             Confidence level for the interval (between 0 and 1).
-        method : str, default='spline'
-            Method to use for PDF smoothing ('gmm' or 'spline').
+        method : str, default='sample_kde'
+            Method to use for PDF smoothing ('gmm', 'spline', or 'sample_kde').
         num_points : int, default=1000
             Number of points to use for the PDF.
             
@@ -722,7 +764,7 @@ class ProbGBT:
             
         return quantile_preds
         
-    def predict_pdf(self, X, num_points=1000, method='spline', use_calibration=True):
+    def predict_pdf(self, X, num_points=1000, method='sample_kde', use_calibration=True):
         """
         Predict the probability density function for the given samples.
         
@@ -732,10 +774,11 @@ class ProbGBT:
             Features to predict on.
         num_points : int, default=1000
             Number of points to use for the PDF.
-        method : str, default='spline'
+        method : str, default='sample_kde'
             Method to use for PDF smoothing:
-            - 'spline': Original method using GAM smoothing only (recommended)
-            - 'gmm': Kernel Density Estimation applied on top of spline smoothing 
+            - 'spline': Original method using GAM smoothing only
+            - 'gmm': Kernel Density Estimation applied on top of spline smoothing
+            - 'sample_kde': Sample from empirical CDF and apply KDE smoothing (default)
         use_calibration : bool, default=True
             Whether to base the PDF on calibrated quantiles (if available).
             - True: Uses calibrated quantiles for better statistical coverage
@@ -1083,7 +1126,7 @@ class ProbGBT:
         # Return results as DataFrame
         return pd.DataFrame(coverage_results) 
 
-    def predict_distribution(self, X, confidence_levels=None, method='spline', num_points=1000):
+    def predict_distribution(self, X, confidence_levels=None, method='sample_kde', num_points=1000):
         """
         Predict both calibrated confidence intervals and a smooth probability distribution.
         
@@ -1097,8 +1140,8 @@ class ProbGBT:
             Features to predict on.
         confidence_levels : list of float, optional
             List of confidence levels for prediction intervals. If None, uses [0.5, 0.8, 0.9, 0.95, 0.99].
-        method : str, default='spline'
-            Method to use for PDF smoothing ('gmm' or 'spline').
+        method : str, default='sample_kde'
+            Method to use for PDF smoothing ('gmm', 'spline', or 'sample_kde').
         num_points : int, default=1000
             Number of points to use for the PDF.
             

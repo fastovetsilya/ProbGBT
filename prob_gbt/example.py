@@ -85,7 +85,7 @@ def main():
     )
 
     # Define smoothing method for all predictions
-    smoothing_method = 'gmm'  # Use GMM smoothing on top of spline for better curves
+    smoothing_method = 'sample_kde'  # Use GMM smoothing on top of spline for better curves
 
     # Make predictions in log space
     print("\nMaking predictions...")

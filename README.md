@@ -44,9 +44,34 @@ ProbGBT is a probabilistic machine learning model that extends gradient boosted 
 
 *Feature importance and its relationship with prediction uncertainty, demonstrating which features contribute most to the model's predictions and uncertainty.*
 
-![Calibration Plot](./images/calibration_plot.png)
+### Calibration Analysis
 
-*Calibration plot showing how well the predicted confidence intervals match the observed coverage, with a focus on the 95% confidence level.*
+<table>
+  <tr>
+    <td><img src="./images/calibration_plot.png" alt="Calibration Plot" width="100%"/></td>
+  </tr>
+  <tr>
+    <td><img src="./images/calibration_error_plot.png" alt="Calibration Error Plot" width="100%"/></td>
+  </tr>
+</table>
+
+*Top: Calibration plot showing the relationship between expected coverage (confidence level) and observed coverage. The blue line represents the observed coverage at different confidence levels, while the dashed black line indicates perfect calibration. The plot also shows how confidence interval width increases with confidence level.*
+
+*Bottom: Calibration error plot showing the difference between observed and expected coverage across confidence levels. Points highlight key confidence levels (50%, 80%, 90%, 95%, 99%), and the green band indicates an acceptable error range of ±2%. This plot helps identify where the model might be over-confident (negative values) or under-confident (positive values).*
+
+The calibration analysis is crucial for assessing the reliability of the model's uncertainty estimates:
+
+1. **Perfect calibration** would follow the diagonal line in the calibration plot, meaning that for any confidence level α, exactly α% of the true values fall within the predicted intervals.
+
+2. **Over-confidence** occurs when the blue line falls below the diagonal, indicating that the predicted intervals are too narrow and contain fewer true values than expected.
+
+3. **Under-confidence** occurs when the blue line is above the diagonal, indicating that the predicted intervals are unnecessarily wide.
+
+4. **The calibration error plot** makes it easier to identify miscalibration patterns across different confidence levels, with values closer to zero indicating better calibration.
+
+5. **Confidence interval width** (shown in the bottom part of the calibration plot) typically increases as the confidence level increases, but the rate of increase can reveal patterns in the model's uncertainty estimation.
+
+ProbGBT's conformal calibration mechanism aims to ensure that the calibration curve stays close to the diagonal, providing statistically valid uncertainty estimates.
 
 ## Installation
 
@@ -87,6 +112,7 @@ poetry run run-example
 ```python
 from prob_gbt import ProbGBT
 from sklearn.model_selection import train_test_split
+import numpy as np
 
 # Prepare your data
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
@@ -95,18 +121,43 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 model = ProbGBT(num_quantiles=50, iterations=500, train_separate_models=False)
 model.train(X_train, y_train, cat_features=cat_features)
 
-# Make point predictions
-y_pred = model.predict(X_test)
+# Get raw quantile predictions (useful for direct quantile-based analyses)
+raw_quantiles = model.predict_raw(X_test)
 
-# Get confidence intervals
-lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95)
+# Get probability distributions (PDF and CDF)
+distributions = model.predict(X_test, method='sample_kde')
 
-# Get full probability distributions
-pdfs = model.predict_pdf(X_test)
+# Helper functions to calculate point estimates and intervals from distributions
+def calculate_median(x_values, cdf_values):
+    """Calculate the median from a CDF."""
+    median_idx = np.searchsorted(cdf_values, 0.5, side='left')
+    median_idx = max(0, min(median_idx, len(x_values) - 1))
+    return x_values[median_idx]
 
-# Using GMM smoothing for more robust distributions (for multi-modal data)
-lower_gmm, upper_gmm = model.predict_interval(X_test, confidence_level=0.95, method='gmm')
-pdfs_gmm = model.predict_pdf(X_test, method='gmm')
+def calculate_confidence_interval(x_values, cdf_values, confidence_level=0.95):
+    """Calculate confidence interval from a CDF."""
+    lower_q = (1 - confidence_level) / 2
+    upper_q = 1 - lower_q
+    
+    lower_idx = np.searchsorted(cdf_values, lower_q, side='left')
+    upper_idx = np.searchsorted(cdf_values, upper_q, side='left')
+    
+    lower_idx = max(0, min(lower_idx, len(x_values) - 1))
+    upper_idx = max(0, min(upper_idx, len(x_values) - 1))
+    
+    return x_values[lower_idx], x_values[upper_idx]
+
+# Calculate median predictions
+y_pred = np.array([calculate_median(x_vals, cdf_vals) for x_vals, _, cdf_vals in distributions])
+
+# Calculate 95% confidence intervals
+intervals = [calculate_confidence_interval(x_vals, cdf_vals, 0.95) 
+            for x_vals, _, cdf_vals in distributions]
+lower_bounds = np.array([lower for lower, _ in intervals])
+upper_bounds = np.array([upper for _, upper in intervals])
+
+# Using different smoothing methods
+gmm_distributions = model.predict(X_test, method='gmm')
 ```
 
 ### Using Calibration
@@ -134,11 +185,29 @@ model.train(
     calibration_set=(X_cal, y_cal)  # Use separate calibration data
 )
 
-# Get calibrated confidence intervals
-lower_bounds, upper_bounds = model.predict_interval(X_test, confidence_level=0.95)
+# For calibrated models, you can compute confidence intervals directly from raw quantiles
+# This is often more accurate than using the smoothed distributions
+def calculate_intervals_from_raw_quantiles(quantile_preds, quantiles, confidence_level=0.95):
+    """Calculate confidence intervals directly from raw quantile predictions."""
+    lower_q = (1 - confidence_level) / 2
+    upper_q = 1 - lower_q
+    
+    # Find the closest available quantiles
+    lower_idx = np.argmin(np.abs(quantiles - lower_q))
+    upper_idx = np.argmin(np.abs(quantiles - upper_q))
+    
+    # Get the predicted values at those quantiles
+    return quantile_preds[:, lower_idx], quantile_preds[:, upper_idx]
 
-# Get calibrated PDFs
-pdfs = model.predict_pdf(X_test, use_calibration=True)
+# Get calibrated raw quantiles
+raw_quantiles = model.predict_raw(X_test)
+
+# Calculate confidence intervals directly from calibrated quantiles
+lower_bounds, upper_bounds = calculate_intervals_from_raw_quantiles(
+    raw_quantiles, model.quantiles, confidence_level=0.95)
+
+# Get calibrated PDFs and CDFs
+distributions = model.predict(X_test)
 
 # Evaluate calibration quality
 calibration_results = model.evaluate_calibration(X_val, y_val)
@@ -237,8 +306,37 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
      ```
    - This uses the trapezoidal rule for numerical integration
 
-6. **Gaussian Mixture Model (GMM) Smoothing**:
-   - In addition to spline-based smoothing, ProbGBT offers an optional GMM-based smoothing method
+6. **Sample-based KDE Smoothing (Default)**:
+   - ProbGBT's default smoothing method (`sample_kde`) uses a different approach that combines sampling and Kernel Density Estimation
+   - The process works as follows:
+     1. Generate random uniform samples in the probability space between 0 and 1:
+        ```python
+        prob_samples = np.random.uniform(0, 1, n_samples)
+        ```
+     2. Transform these samples into the target variable space by interpolating from the predicted quantiles:
+        ```python
+        samples = np.interp(prob_samples, self.quantiles, y_pred_sample)
+        ```
+     3. Apply Kernel Density Estimation (KDE) to these samples to get a smooth PDF:
+        ```python
+        kde = KernelDensity(bandwidth='silverman', kernel='gaussian')
+        kde.fit(samples)
+        pdf_values = np.exp(kde.score_samples(x_values))
+        ```
+     4. Normalize the PDF and compute the CDF using numerical integration:
+        ```python
+        pdf_values = pdf_values / np.trapz(pdf_values, x_values.ravel())
+        cdf_values = cumulative_trapezoid(pdf_values, x_values.ravel(), initial=0)
+        ```
+   - This method has several advantages:
+     - Produces smoother distributions than direct differentiation of the quantile function
+     - Better captures complex shapes including multi-modality
+     - More robust to noise in the predicted quantiles
+     - Automatically adapts to the data density in different regions
+   - The 'silverman' rule for bandwidth selection automatically determines an appropriate smoothing level based on the data
+
+7. **Gaussian Mixture Model (GMM) Smoothing**:
+   - In addition to spline-based and sample-based KDE smoothing, ProbGBT offers an optional GMM-based smoothing method
    - GMM fits a mixture of Gaussian distributions to the data, providing a more robust representation for complex distributions
    - This can be enabled by setting `method='gmm'` in the `predict_pdf()` or `predict_interval()` functions:
      ```python
@@ -325,13 +423,30 @@ ProbGBT(
 #### Methods:
 
 - `train(X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True, calibration_set=None, calibration_size=0.2)`: Train the model
-- `predict(X, return_quantiles=False)`: Make predictions
-- `predict_interval(X, confidence_level=0.95, method='spline', num_points=1000)`: Predict confidence intervals
-- `predict_pdf(X, num_points=1000, method='spline', use_calibration=True)`: Predict probability density functions
+- `predict_raw(X)`: Get raw quantile predictions (with calibration applied if enabled)
+- `predict(X, method='sample_kde', num_points=1000)`: Predict probability density functions and CDFs for the given samples
 - `evaluate_calibration(X_val, y_val, confidence_levels=None)`: Evaluate calibration quality on validation data
-- `predict_distribution(X, confidence_levels=None, method='spline', num_points=1000)`: Get both calibrated intervals and smoothed PDFs
 - `save(filepath, format='cbm', compression_level=6)`: Save the trained model to a file
 - `load(filepath, format='cbm')`: Load a saved model from a file
+
+**Note:** The following methods have been removed in the newest version, as their functionality is now integrated directly into the predict() method combined with helper functions:
+- `predict_interval`: Use predict() and calculate confidence intervals from the returned CDFs
+- `predict_pdf`: Use predict() directly
+- `predict_distribution`: Use predict() and calculate statistics from the returned distributions
+
+> **API Changes in v2.0**
+> 
+> The ProbGBT API has been refactored to be more efficient and flexible:
+>
+> 1. The `predict()` method now returns a list of tuples: `[(x_values, pdf_values, cdf_values), ...]` for each sample, providing both PDF and CDF in a single call.
+> 
+> 2. The `predict_raw()` method returns the raw quantile predictions (with calibration applied if enabled). For calibrated models, getting confidence intervals directly from these raw quantiles is more accurate.
+>
+> 3. Statistics and intervals are calculated from the distributions rather than making separate API calls. This approach is more efficient because it computes the distribution only once.
+>
+> 4. The default smoothing method is now `sample_kde`, which produces higher quality PDFs, especially for complex distributions.
+>
+> See the examples above for how to calculate medians and confidence intervals using the new API.
 
 ### Save and Load Functionality
 

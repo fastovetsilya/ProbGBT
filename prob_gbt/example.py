@@ -130,7 +130,7 @@ def main():
     print("\nTraining ProbGBT model...")
     model = ProbGBT(
         num_quantiles=100,
-        iterations=50,
+        iterations=1500,
         subsample=1.0,
         random_seed=1234,
         calibrate=True, 
@@ -147,8 +147,8 @@ def main():
         verbose=True
     )
 
-    # Define smoothing method for all predictions
-    smoothing_method = 'sample_kde'  # Use smoothing method for better curves
+    # Define smoothing method: sample_kde (default), spline, gmm
+    smoothing_method = 'sample_kde'
 
     # First, get the raw quantile predictions for direct interval calculation
     print("\nGetting raw quantile predictions...")
@@ -408,15 +408,29 @@ def main():
     print("Saved feature importance and uncertainty plot to ./images/feature_uncertainty.png")
     
     # 4. Enhanced calibration plot with detailed metrics
-    print("\nCreating enhanced calibration plot with metrics...")
-    # Create confidence levels array with 0.95 included exactly
-    confidence_levels_1 = np.linspace(0.1, 0.94, 15)
-    confidence_levels_2 = np.linspace(0.96, 0.99, 4)
-    confidence_levels = np.concatenate([confidence_levels_1, np.array([0.95]), confidence_levels_2])
+    print("\nCreating calibration plot with metrics...")
+    
+    # First, use the evaluate_calibration method to get calibration results for key confidence levels
+    print("Evaluating calibration using model.evaluate_calibration()...")
+    cal_eval_results = model.evaluate_calibration(X_test, y_test)
+    print("\nCalibration evaluation results:")
+    print(cal_eval_results)
+    
+    # Create a much finer grid of confidence levels for the detailed calibration curve
+    # Create a denser grid of confidence levels with more points
+    confidence_levels_dense = np.concatenate([
+        np.linspace(0.01, 0.09, 9),           # 1% to 9% in 1% steps
+        np.linspace(0.1, 0.9, 81),            # 10% to 90% in 1% steps
+        np.linspace(0.91, 0.99, 9),           # 91% to 99% in 1% steps
+        np.array([0.95, 0.975, 0.99])         # Add specific levels of interest
+    ])
+    # Remove duplicates and sort
+    confidence_levels_dense = np.unique(confidence_levels_dense)
+    
     observed_coverages = []
     ci_widths_by_level = []
     
-    # Create a figure for the enhanced calibration plot
+    # Create a figure for the calibration plot
     plt.figure(figsize=(12, 10))
     
     # Create two subplots: calibration curve and width vs. confidence level
@@ -424,12 +438,9 @@ def main():
     ax1 = plt.subplot(gs[0])
     ax2 = plt.subplot(gs[1])
     
-    # Use the calibration results from model.evaluate_calibration for key confidence levels
-    # and use direct calculation for the rest
-    
-    # First, compute a more detailed calibration curve for visualization
-    print("Calculating coverage for different confidence levels...")
-    for conf_level in tqdm(confidence_levels, desc="Evaluating confidence levels"):
+    # Calculate coverage for each confidence level in the dense grid
+    print("Calculating coverage for a dense grid of confidence levels...")
+    for conf_level in tqdm(confidence_levels_dense, desc="Evaluating confidence levels"):
         # For each confidence level, calculate intervals
         if model.calibrate and model.is_calibrated:
             # Use the direct quantile approach
@@ -450,19 +461,25 @@ def main():
         coverage = np.mean((y_raw_test >= lower) & (y_raw_test <= upper))
         avg_width = np.mean(upper - lower)
         
-        print(f"Coverage for {conf_level:.2f}: {coverage:.2%}, Avg. width: {avg_width:.2f}")
+        # Only print a subset of levels to avoid flooding the output
+        if np.isclose(conf_level % 0.1, 0, atol=0.005) or conf_level in [0.95, 0.975, 0.99]:
+            print(f"Coverage for {conf_level:.2f}: {coverage:.2%}, Avg. width: {avg_width:.2f}")
+        
         observed_coverages.append(coverage)
         ci_widths_by_level.append(avg_width)
     
-    # Main calibration curve
-    ax1.plot(confidence_levels, observed_coverages, 'o-', label='Observed coverage')
+    # Plot dense calibration curve
+    ax1.plot(confidence_levels_dense, observed_coverages, '-', color='blue', linewidth=2, 
+             label='Observed coverage')
+    
+    # Plot ideal calibration line
     ax1.plot([0, 1], [0, 1], 'k--', label='Ideal calibration')
     
     # Add vertical line at 95% confidence level
     ax1.axvline(x=0.95, color='r', linestyle='--', alpha=0.7, label='95% confidence level')
     
-    # Find the observed coverage at 95% confidence level (or closest to it)
-    idx_95 = np.abs(confidence_levels - 0.95).argmin()
+    # Find the observed coverage at 95% confidence level
+    idx_95 = np.abs(confidence_levels_dense - 0.95).argmin()
     coverage_at_95 = observed_coverages[idx_95]
     
     # Add horizontal line from the 95% point to the y-axis
@@ -490,16 +507,47 @@ def main():
     ax1.set_ylim(0, 1.05)
     ax1.legend(loc='lower right')
     
-    # Plot average CI width vs. confidence level
-    ax2.plot(confidence_levels, ci_widths_by_level, 'o-', color='green')
+    # Plot interval width vs confidence level
+    ax2.plot(confidence_levels_dense, ci_widths_by_level, '-', color='green', linewidth=2,
+             label='CI width')
+    
     ax2.set_xlabel('Confidence Level')
     ax2.set_ylabel('Avg. CI Width')
     ax2.set_title('Average Confidence Interval Width by Confidence Level')
     ax2.grid(True)
+    ax2.legend(loc='upper left')
     
     plt.tight_layout()
-    plt.savefig('./images/enhanced_calibration_plot.png', dpi=300, bbox_inches='tight')
-    print("Saved enhanced calibration plot to ./images/enhanced_calibration_plot.png")
+    plt.savefig('./images/calibration_plot.png', dpi=300, bbox_inches='tight')
+    print("Saved calibration plot to ./images/calibration_plot.png")
+    
+    # 5. Calibration error plot - shows miscalibration by confidence level
+    plt.figure(figsize=(10, 6))
+    
+    # Calculate calibration error (observed - expected)
+    calibration_errors = np.array(observed_coverages) - confidence_levels_dense
+    
+    plt.plot(confidence_levels_dense, calibration_errors, '-', color='purple', linewidth=2)
+    plt.axhline(y=0, color='black', linestyle='--', alpha=0.7, label='Perfect calibration')
+    
+    # Add points for key confidence levels
+    key_levels = [0.5, 0.8, 0.9, 0.95, 0.99]
+    for level in key_levels:
+        idx = np.abs(confidence_levels_dense - level).argmin()
+        plt.plot(level, calibration_errors[idx], 'o', markersize=8, 
+                 label=f'{level:.0%}: {calibration_errors[idx]*100:+.1f}%')
+    
+    plt.grid(True)
+    plt.xlabel('Confidence Level')
+    plt.ylabel('Calibration Error (Observed - Expected)')
+    plt.title('Calibration Error by Confidence Level')
+    plt.legend(loc='best')
+    
+    # Add horizontal lines showing acceptable error ranges (+/- 2%)
+    plt.axhspan(-0.02, 0.02, alpha=0.1, color='green', label='±2% error range')
+    
+    plt.savefig('./images/calibration_error_plot.png', dpi=300, bbox_inches='tight')
+    print("Saved calibration error plot to ./images/calibration_error_plot.png")
 
     print("\nExample completed. Check the generated plots in the images directory.")
 

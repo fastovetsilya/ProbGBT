@@ -89,9 +89,6 @@ Or using Poetry:
 ```bash
 # Install dependencies with Poetry
 poetry install
-
-# Run the example
-poetry run run-example
 ```
 
 ## Dependencies
@@ -107,145 +104,19 @@ poetry run run-example
 
 ## Usage
 
-### Basic Example
+For detailed usage examples, please refer to the example files in the `examples/` directory.
 
-```python
-from prob_gbt import ProbGBT
-from sklearn.model_selection import train_test_split
-import numpy as np
+### Running Examples
 
-# Prepare your data
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-
-# Initialize and train the model
-model = ProbGBT(num_quantiles=50, iterations=500, train_separate_models=False)
-model.train(X_train, y_train, cat_features=cat_features)
-
-# Get raw quantile predictions (useful for direct quantile-based analyses)
-raw_quantiles = model.predict_raw(X_test)
-
-# Get probability distributions (PDF and CDF)
-distributions = model.predict(X_test, method='sample_kde')
-
-# Helper functions to calculate point estimates and intervals from distributions
-def calculate_median(x_values, cdf_values):
-    """Calculate the median from a CDF."""
-    median_idx = np.searchsorted(cdf_values, 0.5, side='left')
-    median_idx = max(0, min(median_idx, len(x_values) - 1))
-    return x_values[median_idx]
-
-def calculate_confidence_interval(x_values, cdf_values, confidence_level=0.95):
-    """Calculate confidence interval from a CDF."""
-    lower_q = (1 - confidence_level) / 2
-    upper_q = 1 - lower_q
-    
-    lower_idx = np.searchsorted(cdf_values, lower_q, side='left')
-    upper_idx = np.searchsorted(cdf_values, upper_q, side='left')
-    
-    lower_idx = max(0, min(lower_idx, len(x_values) - 1))
-    upper_idx = max(0, min(upper_idx, len(x_values) - 1))
-    
-    return x_values[lower_idx], x_values[upper_idx]
-
-# Calculate median predictions
-y_pred = np.array([calculate_median(x_vals, cdf_vals) for x_vals, _, cdf_vals in distributions])
-
-# Calculate 95% confidence intervals
-intervals = [calculate_confidence_interval(x_vals, cdf_vals, 0.95) 
-            for x_vals, _, cdf_vals in distributions]
-lower_bounds = np.array([lower for lower, _ in intervals])
-upper_bounds = np.array([upper for _, upper in intervals])
-
-# Using different smoothing methods
-gmm_distributions = model.predict(X_test, method='gmm')
-```
-
-### Using Calibration
-
-```python
-# Initialize a model with calibration enabled
-model = ProbGBT(
-    num_quantiles=50,
-    iterations=500,
-    calibrate=True  # Enable calibration
-)
-
-# Train the model with calibration
-# A portion of the training data will be used for calibration
-model.train(
-    X_train, y_train,
-    cat_features=cat_features,
-    calibration_size=0.2  # Use 20% of training data for calibration
-)
-
-# Alternatively, provide a separate calibration set
-model.train(
-    X_train, y_train,
-    cat_features=cat_features,
-    calibration_set=(X_cal, y_cal)  # Use separate calibration data
-)
-
-# For calibrated models, you can compute confidence intervals directly from raw quantiles
-# This is often more accurate than using the smoothed distributions
-def calculate_intervals_from_raw_quantiles(quantile_preds, quantiles, confidence_level=0.95):
-    """Calculate confidence intervals directly from raw quantile predictions."""
-    lower_q = (1 - confidence_level) / 2
-    upper_q = 1 - lower_q
-    
-    # Find the closest available quantiles
-    lower_idx = np.argmin(np.abs(quantiles - lower_q))
-    upper_idx = np.argmin(np.abs(quantiles - upper_q))
-    
-    # Get the predicted values at those quantiles
-    return quantile_preds[:, lower_idx], quantile_preds[:, upper_idx]
-
-# Get calibrated raw quantiles
-raw_quantiles = model.predict_raw(X_test)
-
-# Calculate confidence intervals directly from calibrated quantiles
-lower_bounds, upper_bounds = calculate_intervals_from_raw_quantiles(
-    raw_quantiles, model.quantiles, confidence_level=0.95)
-
-# Get calibrated PDFs and CDFs
-distributions = model.predict(X_test)
-
-# Evaluate calibration quality
-calibration_results = model.evaluate_calibration(X_val, y_val)
-print(calibration_results)
-```
-
-#### Calibration Dataset Options
-
-ProbGBT offers two approaches for obtaining the calibration dataset required for conformal prediction:
-
-1. **Automatic Splitting (Default)**:
-   - If no calibration set is provided, ProbGBT automatically splits a portion of the training data.
-   - The `calibration_size` parameter controls what fraction of the training data to use (default: 0.2).
-   - Pros: Simple, requires no additional data preparation.
-   - Cons: Reduces the effective training set size for model building.
-
-2. **Separate Calibration Dataset**:
-   - You can provide a separate calibration set using the `calibration_set=(X_cal, y_cal)` parameter.
-   - Pros: Maximizes the data available for training the base model, may provide better calibration if the calibration set is properly representative.
-   - Cons: Requires preparing a separate dataset, which should ideally come from the same distribution as the training data.
-
-**Note**: When no calibration set is provided and `calibration_size > 0`, the following occurs:
-1. The training data is randomly shuffled (controlled by `random_seed`).
-2. The first `calibration_size` fraction is reserved for calibration.
-3. The model is trained on the remaining `(1-calibration_size)` fraction.
-4. The calibration set is used to compute nonconformity scores for each quantile.
-
-For time series data or when data ordering matters, it's recommended to manually prepare a calibration set rather than relying on random splitting.
-
-### Example Script
-
-The repository includes an example script that demonstrates how to use ProbGBT with the California housing prices dataset:
+You can run the examples using:
 
 ```bash
 # Using Python directly
-python run_example.py
+python examples/run_example.py
 
 # Using Poetry
+poetry run python examples/run_example.py
+# Or, if configured in pyproject.toml
 poetry run run-example
 ```
 
@@ -307,7 +178,7 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
    - This uses the trapezoidal rule for numerical integration
 
 6. **Comparison of PDF Smoothing Methods**:
-   - ProbGBT offers three methods for smoothing the quantile predictions into PDFs, each with different characteristics:
+   ProbGBT offers three methods for smoothing the quantile predictions into PDFs, each with different characteristics:
    
    - **Sample-based KDE (`sample_kde`)**: The default method
      - Fully nonparametric approach that makes no assumptions about the distribution shape

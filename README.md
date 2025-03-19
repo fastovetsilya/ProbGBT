@@ -219,17 +219,11 @@ The calibration feature in ProbGBT uses conformal prediction to ensure that the 
    - This is calculated as the empirical $(n+1)\alpha/n$ quantile of the nonconformity scores
    - The adjusted prediction is then: $q_{\alpha}^{\text{cal}}(X) = q_{\alpha}(X) + \hat{s}$
 
-4. **Interval Calculation**:
-   - For calibrated models, confidence intervals directly use the calibrated quantiles
-   - For a $(1-\alpha)$ confidence interval, the lower bound uses the $\alpha/2$ quantile and the upper bound uses the $(1-\alpha/2)$ quantile
-   - These intervals have a theoretical guarantee to include the true value with at least the specified probability
-
-5. **PDF from Calibrated Quantiles**:
-   - When `use_calibration=True` in `predict_pdf()`, the smoothed PDF is constructed from the calibrated quantiles
+4. **PDF from Calibrated Quantiles**:
+   - If ProbGBT() was initialized with `calibrate=True` (default), the smoothed PDF is constructed from the calibrated quantiles
    - This ensures the PDF is consistent with the calibrated confidence intervals
    - The resulting PDFs maintain statistical validity while providing smooth, continuous distributions
 
-The calibration process ensures that the model's uncertainty predictions are statistically valid and well-calibrated. This is particularly important in high-stakes applications where reliable uncertainty estimates are critical.
 
 ## API Reference
 
@@ -268,7 +262,6 @@ ProbGBT(
 - `save(filepath, format='cbm', compression_level=6)`: Save the trained model to a file
 - `load(filepath, format='cbm')`: Load a saved model from a file
 
-**Note:** Statistics and intervals are calculated from the distributions returned by the `predict()` method. This approach is more efficient because it computes the distribution only once.
 
 ### Save and Load Functionality
 
@@ -296,7 +289,7 @@ save(filepath, format='cbm', compression_level=6)
 - `compression_level`: Compression level for xz compression (1-9, where 9 is highest). Only used with separate models.
 
 For the single model approach (when `train_separate_models=False`), this uses CatBoost's native `save_model` method.
-For the separate models approach (when `train_separate_models=True`), this saves each model separately and compresses them into a tar.xz file with progress bars for monitoring.
+For the separate models approach (when `train_separate_models=True`), this saves each model separately and compresses them into a tar.xz file.
 
 #### Load Method
 

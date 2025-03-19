@@ -712,72 +712,16 @@ class ProbGBT:
             quantile_preds = np.array(quantile_preds)
         else:
             # Get quantile predictions from the single model
-            raw_preds = self.model.predict(X)
+            quantile_preds = self.model.predict(X)
             
             # For a single sample, reshape to 2D
-            if len(raw_preds.shape) == 1:
-                raw_preds = raw_preds.reshape(1, -1)
+            if len(quantile_preds.shape) == 1:
+                quantile_preds = quantile_preds.reshape(1, -1)
             
-            # By default, assume the predictions are already aligned with our quantiles
-            quantile_preds = raw_preds
-            
-            # TODO: this part may not be needed if we use fixed seed
-            # Check if we need to reorder predictions based on saved quantile mapping
-            if hasattr(self, 'model_quantiles') and self.model_quantiles is not None:
-                # If we have saved model quantiles that differ from our quantiles, reorder
-                if len(self.model_quantiles) == raw_preds.shape[1] and not np.array_equal(self.model_quantiles, self.quantiles):
-                    # Create a new array for reordered predictions
-                    reordered_preds = np.zeros((raw_preds.shape[0], len(self.quantiles)))
-                    
-                    # For each quantile in self.quantiles, find the matching quantile in model_quantiles
-                    for i, q in enumerate(self.quantiles):
-                        # Find exact matching quantile or closest if not exact
-                        # Use approximate equality with tolerance for floating point precision
-                        tolerance = 1e-8
-                        matches = np.where(np.abs(self.model_quantiles - q) < tolerance)[0]
-                        if len(matches) > 0:
-                            # Approximate match found
-                            idx = matches[0]
-                        else:
-                            # Find closest match
-                            closest_q = self.model_quantiles[np.argmin(np.abs(self.model_quantiles - q))]
-                            idx = np.argmin(np.abs(self.model_quantiles - q))
-                        
-                        reordered_preds[:, i] = raw_preds[:, idx]
-                    
-                    quantile_preds = reordered_preds
-            # Our earlier logic for when we don't have a saved mapping but quantiles mismatch
-            elif raw_preds.shape[1] != len(self.quantiles):
-                # Try to extract the correct ordering from the model
-                model_quantiles = None
-                try:
-                    loss_function = self.model.get_param('loss_function')
-                    if loss_function and 'MultiQuantile:alpha=' in loss_function:
-                        quantiles_str = loss_function.split('MultiQuantile:alpha=')[1]
-                        model_quantiles = np.array([float(q.strip()) for q in quantiles_str.split(',')])
-                except:
-                    pass
-                
-                # If we have model_quantiles and self.quantiles, we need to reorder the predictions
-                if model_quantiles is not None and len(model_quantiles) == raw_preds.shape[1]:
-                    # Create a mapping from model_quantiles to indices
-                    model_indices = {q: i for i, q in enumerate(model_quantiles)}
-                    
-                    # Create a new array for reordered predictions
-                    reordered_preds = np.zeros((raw_preds.shape[0], len(self.quantiles)))
-                    
-                    # For each quantile in self.quantiles, find the closest in model_quantiles
-                    for i, q in enumerate(self.quantiles):
-                        # Find closest quantile in model_quantiles
-                        closest_q = model_quantiles[np.argmin(np.abs(model_quantiles - q))]
-                        closest_idx = model_indices[closest_q]
-                        reordered_preds[:, i] = raw_preds[:, closest_idx]
-                    
-                    quantile_preds = reordered_preds
-                else:
-                    # If we can't reorder properly, use raw predictions
-                    quantile_preds = raw_preds
-            
+            # Verify dimensions match expected quantiles
+            if quantile_preds.shape[1] != len(self.quantiles):
+                print(f"Warning: Model output shape {quantile_preds.shape[1]} doesn't match expected number of quantiles {len(self.quantiles)}")
+        
         # For a single sample
         if len(quantile_preds.shape) == 1:
             quantile_preds = quantile_preds.reshape(1, -1)

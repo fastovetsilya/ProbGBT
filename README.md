@@ -148,7 +148,7 @@ The PDF generation process in ProbGBT involves several steps:
 1. **Non-uniform Quantile Generation**: 
    - Instead of using uniformly spaced quantiles, ProbGBT transforms them using the normal distribution's PPF (Percent Point Function) and CDF (Cumulative Distribution Function)
    - This places more focus on the tails of the distribution, improving the model's ability to capture extreme values
-   - The transformation uses: $\text{non\_uniform\_quantiles} = \text{norm.cdf}(\text{norm.ppf}(\text{uniform\_quantiles}) \cdot 1.5)$
+   - The transformation uses: $non\_uniform\_quantiles = norm.cdf(norm.ppf(uniform\_quantiles) \cdot 1.5)$
 
 2. **Quantile Prediction with CatBoost**:
    - The model can use either:

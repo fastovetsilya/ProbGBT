@@ -1,13 +1,16 @@
 # ProbGBT: Probabilistic Gradient Boosted Trees
 
-ProbGBT is a fully nonparametric probabilistic machine learning model that extends gradient boosted trees to provide uncertainty estimates. It uses CatBoost's MultiQuantile loss function to predict multiple quantiles of the target distribution, then constructs a probability density function (PDF) from these quantiles without making any assumptions about the underlying distribution shape.
+ProbGBT is a fully nonparametric probabilistic machine learning model that extends gradient boosted trees to provide uncertainty estimates. It is built on top of quantile regression functionality provided by Catboost package.
+
+First, the model is trained for multiple quantiles. At this step, we implement a non-uniform quantile selection technique to reduce the number of quantiles and improve stability on the tails of the distributions. Then, we reconstruct a probability density function (PDF) from these quantiles without making any assumptions about the underlying distribution shape. To achieve this, we propose three different methods. By default, the model part of the training dataset to calibrate the distributions to achieve reliable coverage for intervals with different confidence levels.
+
+The main goal of this project is to create a tool that is easy to use and flexible enough to be adapted for various datasets. Instead of trying to build the perfect model for a particular problem, we emphasize simplicity as a way to design tools to be used with autonomous LLM agents. Although customizable, the model is ready to be used with default parameters.
 
 ## Features
 
-- **Uncertainty Estimation**: Provides confidence intervals and probability distributions for predictions
+- **Uncertainty Estimation**: Provides smooth or detailed probability distributions
 - **Non-parametric**: Makes no assumptions about the shape of the target distribution
-- **Flexible**: Works with both numerical and categorical features
-- **Efficient**: Built on top of CatBoost's fast gradient boosting implementation
+- **Flexible**: Works with both numerical and categorical features, can be used out of box with default parameters
 - **Multiple Training Strategies**: Supports both single model with MultiQuantile loss and separate models for each quantile
 - **Calibrated Predictions**: Uses conformal prediction to ensure statistically valid confidence intervals
 
@@ -122,7 +125,7 @@ python prob_gbt/examples/example_geospatial.py
 
 This will:
 1. Load the California housing prices dataset
-2. Train a ProbGBT model
+2. Initialize and train a ProbGBT model
 3. Make predictions with uncertainty estimates
 4. Calculate performance metrics
 5. Generate visualizations in the 'images' directory
@@ -136,11 +139,11 @@ ProbGBT works by:
 1. **Quantile Transformation**: Generating non-uniformly spaced quantiles with more focus on the tails of the distribution
 2. **Multi-Quantile Regression**: Training a CatBoost model to predict multiple quantiles simultaneously (or separate models for each quantile)
 3. **PDF Estimation**: Computing the probability density function from quantiles
-4. **Calibration** (optional): Using conformal prediction to ensure statistical validity of the confidence intervals
+4. **Calibration** (enabled by default): Using conformal prediction to ensure statistical validity of the confidence intervals
 
 ### Technical Details on PDF Generation
 
-The PDF generation process in ProbGBT involves several sophisticated steps:
+The PDF generation process in ProbGBT involves several steps:
 
 1. **Non-uniform Quantile Generation**: 
    - Instead of using uniformly spaced quantiles, ProbGBT transforms them using the normal distribution's PPF (Percent Point Function) and CDF (Cumulative Distribution Function)
@@ -151,23 +154,20 @@ The PDF generation process in ProbGBT involves several sophisticated steps:
    - The model can use either:
      - CatBoost's MultiQuantile loss function to predict all quantiles simultaneously (default)
      - Separate CatBoost models for each quantile (when `train_separate_models=True`)
-   - The first approach ensures consistency between quantiles and improves computational efficiency
-   - The second approach may provide more flexibility for complex distributions
 
 3. **PDF Generation Methods**:
    ProbGBT offers three methods for transforming quantile predictions into PDFs, each with different characteristics:
    
-   - **Sample-based KDE (`sample_kde`)**: The default method
+   - **Sampling with KDE (`sample_kde`)**: The default method
      - Fully nonparametric approach that makes no assumptions about the distribution shape
-     - Generates samples from the empirical CDF and applies Kernel Density Estimation
-     - Produces the most flexible and accurate representations of complex distributions
-     - Can effectively capture multi-modal distributions and asymmetric tails
+     - Generates samples from the empirical CDF and applies Kernel Density Estimation (with `method='Silverman'`)
+     - Produces smooth distributions
      - Most computationally intensive method (slowest)
      - Prone to under confidence (distributions too wide), but effectively fixed with conformal calibration (enabled by default)
    
    - **Spline-based smoothing (`spline`)**:
-     - Nonparametric approach that directly smooths the quantile function using splines
-     - Fits a Generalized Additive Model (splines) with monotonicity constraints
+     - Nonparametric approach that directly approximates empirical CDF using splines
+     - Fits a splines with monotonicity constraints using PyGAM package
      - Fastest method with lowest computational overhead
      - May produce peaky or irregular distributions in some cases
      - Recommended when no calibration is used: produces most calibrated distributions

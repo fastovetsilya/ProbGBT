@@ -148,7 +148,7 @@ The PDF generation process in ProbGBT involves several steps:
 1. **Non-uniform Quantile Generation**: 
    - Instead of using uniformly spaced quantiles, ProbGBT transforms them using the normal distribution's PPF (Percent Point Function) and CDF (Cumulative Distribution Function)
    - This places more focus on the tails of the distribution, improving the model's ability to capture extreme values
-   - The transformation uses: `non_uniform_quantiles = norm.cdf(norm.ppf(uniform_quantiles) * 1.5)`
+   - The transformation uses: $\text{non\_uniform\_quantiles} = \text{norm.cdf}(\text{norm.ppf}(\text{uniform\_quantiles}) \cdot 1.5)$
 
 2. **Quantile Prediction with CatBoost**:
    - The model can use either:
@@ -209,19 +209,19 @@ The calibration feature in ProbGBT uses conformal prediction to ensure that the 
      - The calibration set should ideally come from the same distribution as the training data
 
 2. **Nonconformity Scores**:
-   - For each quantile level α, the model computes nonconformity scores on the calibration set
-   - For the quantile q_α(X), the nonconformity score is: E_i = y_i - q_α(X_i)
+   - For each quantile level $\alpha$, the model computes nonconformity scores on the calibration set
+   - For the quantile $q_{\alpha}(X)$, the nonconformity score is: $E_i = y_i - q_{\alpha}(X_i)$
    - These scores represent how much the true values deviate from the predicted quantiles
 
 3. **Empirical Quantile Adjustment**:
-   - For each desired quantile level α, the model finds s_hat such that:
-     P(y - q_α(X) ≤ s_hat) = α
-   - This is calculated as the empirical (n+1)α/n quantile of the nonconformity scores
-   - The adjusted prediction is then: q_α_cal(X) = q_α(X) + s_hat
+   - For each desired quantile level $\alpha$, the model finds $\hat{s}$ such that:
+     $P(y - q_{\alpha}(X) \leq \hat{s}) = \alpha$
+   - This is calculated as the empirical $(n+1)\alpha/n$ quantile of the nonconformity scores
+   - The adjusted prediction is then: $q_{\alpha}^{\text{cal}}(X) = q_{\alpha}(X) + \hat{s}$
 
 4. **Interval Calculation**:
    - For calibrated models, confidence intervals directly use the calibrated quantiles
-   - For a (1-α) confidence interval, the lower bound uses the α/2 quantile and the upper bound uses the (1-α/2) quantile
+   - For a $(1-\alpha)$ confidence interval, the lower bound uses the $\alpha/2$ quantile and the upper bound uses the $(1-\alpha/2)$ quantile
    - These intervals have a theoretical guarantee to include the true value with at least the specified probability
 
 5. **PDF from Calibrated Quantiles**:

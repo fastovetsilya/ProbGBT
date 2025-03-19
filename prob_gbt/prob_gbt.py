@@ -66,26 +66,6 @@ class ProbGBT:
         self.conformity_scores = None
         self.is_calibrated = False
         self._last_pdfs = None
-        
-    def _generate_non_uniform_quantiles(self):
-        """
-        Generate non-uniformly spaced quantiles with more focus on the tails.
-        
-        Returns:
-        --------
-        numpy.ndarray
-            Array of quantile values between 0 and 1.
-        """
-        # Uniformly spaced quantiles
-        uniform_quantiles = np.linspace(0.01, 0.99, self.num_quantiles)
-        
-        # Transform using normal distribution's PPF and CDF to focus more on the tails
-        non_uniform_quantiles = norm.cdf(norm.ppf(uniform_quantiles) * 1.5)
-        
-        # Ensure values are within [0,1]
-        non_uniform_quantiles = np.clip(non_uniform_quantiles, 0, 1)
-        
-        return non_uniform_quantiles
     
     def train(self, X, y, cat_features=None, eval_set=None, use_best_model=True, verbose=True,
              calibration_set=None, calibration_size=0.2):
@@ -203,67 +183,6 @@ class ProbGBT:
         
         return self
     
-    def _calibrate(self, X_cal, y_cal, verbose=True):
-        """
-        Calibrate the model using conformal prediction.
-        
-        Parameters:
-        -----------
-        X_cal : pandas.DataFrame or numpy.ndarray
-            Calibration features.
-        y_cal : numpy.ndarray
-            Calibration target values.
-        verbose : bool, default=True
-            If True, print calibration progress.
-        
-        Returns:
-        --------
-        None
-        """
-        if verbose:
-            print("Calibrating model using conformal prediction...")
-        
-        # Get uncalibrated quantile predictions on calibration set
-        quantile_preds = self._get_uncalibrated_predictions(X_cal)
-        
-        # For a single sample
-        if len(quantile_preds.shape) == 1:
-            quantile_preds = quantile_preds.reshape(1, -1)
-        
-        # Calculate nonconformity scores for each quantile
-        n_samples = len(y_cal)
-        n_quantiles = len(self.quantiles)
-        
-        # Store calibration information
-        self.conformity_scores = {}
-        
-        # For each quantile, compute nonconformity scores
-        for q_idx, q in enumerate(self.quantiles):
-            # Extract predictions for this quantile
-            q_preds = quantile_preds[:, q_idx]
-            
-            # For lower tail: E_i = y_i - q̂_α(X_i)
-            # We want to adjust the quantile to ensure P(Y ≤ q̂_α(X)) = α
-            conformity_scores = y_cal - q_preds
-            
-            # Store the scores for this quantile
-            self.conformity_scores[q] = conformity_scores
-        
-        # Verify basic properties if verbose is enabled
-        if verbose:
-            for q in [0.1, 0.5, 0.9]:
-                if q in self.quantiles:
-                    q_idx = np.where(self.quantiles == q)[0][0]
-                    # Get predictions for this quantile
-                    q_preds = quantile_preds[:, q_idx]
-                    # Calculate empirical coverage (proportion of y values below prediction)
-                    empirical_coverage = np.mean(y_cal <= q_preds)
-                    print(f"Quantile {q}: Desired coverage = {q*100:.1f}%, Raw empirical coverage = {empirical_coverage*100:.1f}%")
-        
-        self.is_calibrated = True
-        if verbose:
-            print("Calibration completed successfully.")
-    
     def predict_raw(self, X):
         """
         Return raw quantile predictions from the model, applying calibration if enabled.
@@ -323,7 +242,6 @@ class ProbGBT:
         
         return quantile_preds
     
-    
     def predict(self, X, method='sample_kde', num_points=1000):
         """
         Predict the probability density function for the given samples.
@@ -364,353 +282,69 @@ class ProbGBT:
             results.append((x_values, pdf_values, cdf_values))
         
         return results
-    
-    def _get_smoothed_pdf(self, quantile_preds, i, num_points=1000, method='sample_kde'):
-        """
-        Helper method to compute smoothed PDF for a single sample.
-        
-        Parameters:
-        -----------
-        quantile_preds : numpy.ndarray
-            Quantile predictions from predict()
-        i : int
-            Index of the sample in quantile_preds to process.
-        num_points : int, default=1000
-            Number of points to use for the PDF.
-        method : str, default='sample_kde'
-            Method to use for PDF smoothing:
-            - 'spline': Original method using GAM smoothing only
-            - 'gmm': Kernel Density Estimation applied on top of spline smoothing
-            - 'sample_kde': Sample from empirical CDF and apply KDE smoothing (default)
-            
-        Returns:
-        --------
-        tuple: (x_values, pdf_values, cdf_values, quantiles_smooth)
-            - x_values: x-axis values for the PDF (output range)
-            - pdf_values: probability density function values
-            - cdf_values: cumulative distribution function values 
-            - quantiles_smooth: quantile values (0-1 range)
-        """
-        # Get the predicted quantiles for this sample
-        y_pred_sample = quantile_preds[i]
-        
-        if method == 'sample_kde':
-            # Determine the range directly from the quantile predictions
-            y_min, y_max = np.min(y_pred_sample), np.max(y_pred_sample)
-            y_range = y_max - y_min
-            
-            # Add padding to the range to avoid edge effects
-            y_min -= 0.2 * y_range
-            y_max += 0.2 * y_range
-            
-            # Generate random uniform samples for probability values
-            # Use a fixed seed based on the sample index to ensure reproducibility and consistency
-            fixed_seed = 42 + i if self.random_seed is None else self.random_seed + i
-            # Create a local random generator instead of affecting global state
-            rng = np.random.RandomState(fixed_seed)
-            n_samples = num_points  # Number of samples to draw (same as num_points)
-            # Use the local random generator
-            prob_samples = rng.uniform(0, 1, n_samples)
-            
-            # Interpolate to get samples from the empirical CDF
-            samples = np.interp(prob_samples, self.quantiles, y_pred_sample)
-            
-            # Reshape samples for KDE
-            samples = samples.reshape(-1, 1)
-            
-            # Fit KDE and get smoothed PDF
-            kde = KernelDensity(bandwidth='silverman', kernel='gaussian')
-            kde.fit(samples)
-            
-            # Generate points for PDF evaluation
-            x_values = np.linspace(y_min, y_max, num_points).reshape(-1, 1)
-            log_pdf = kde.score_samples(x_values)
-            pdf_values = np.exp(log_pdf)
-            
-            # Normalize PDF
-            pdf_values = pdf_values / np.trapz(pdf_values, x_values.ravel())
-            
-            # Compute CDF using numerical integration
-            cdf_values = cumulative_trapezoid(pdf_values, x_values.ravel(), initial=0)
-            
-            # Ensure CDF ends at 1.0
-            cdf_values /= cdf_values[-1]
-            
-            # Create quantiles_smooth for API consistency
-            quantiles_smooth = np.linspace(0, 1, num_points)
-            
-            return x_values.ravel(), pdf_values, cdf_values, quantiles_smooth
-        
-        if method == 'spline':
-            # Original method using GAM smoothing
-            # Fit a GAM to smooth the quantile function
-            gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
-            
-            # Generate smoothed CDF
-            quantiles_smooth = np.linspace(0, 1, num_points)
-            y_pred_smooth = gam.predict(quantiles_smooth)
-            
-            # Compute PDF (derivative of the quantile function)
-            epsilon = 1e-10  # Small value to avoid division by zero
-            pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
-            
-            # Simple method to ensure non-negativity
-            pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
-            
-            # Normalize the PDF
-            integral = np.trapz(pdf_smooth, y_pred_smooth)
-            if integral > 1e-10:  # Only normalize if integral is not too close to zero
-                pdf_smooth /= integral
-            else:
-                # If integral is too small, use a uniform distribution instead
-                pdf_smooth = np.ones_like(pdf_smooth) / len(pdf_smooth)
-            
-            # Return the quantiles_smooth as the cdf_values for consistency
-            return y_pred_smooth, pdf_smooth, quantiles_smooth, quantiles_smooth
-            
-        elif method == 'gmm':
-            # First get spline results as a base
-            # Fit a GAM to smooth the quantile function
-            gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
-            
-            # Generate smoothed CDF
-            quantiles_smooth = np.linspace(0, 1, num_points)
-            y_pred_smooth = gam.predict(quantiles_smooth)
-            
-            # Compute PDF (derivative of the quantile function)
-            epsilon = 1e-10  # Small value to avoid division by zero
-            pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
-            
-            # Simple method to ensure non-negativity
-            pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
-            
-            # Normalize the PDF
-            integral = np.trapz(pdf_smooth, y_pred_smooth)
-            if integral > 1e-10:
-                pdf_smooth /= integral
-            else:
-                pdf_smooth = np.ones_like(pdf_smooth) / len(pdf_smooth)
-            
-            # Now apply GMM on top of spline results
-            # Check for NaN or Inf values before proceeding with GMM
-            if np.any(np.isnan(pdf_smooth)) or np.any(np.isinf(pdf_smooth)) or np.any(np.isnan(y_pred_smooth)) or np.any(np.isinf(y_pred_smooth)):
-                # If there are NaNs or Infs, skip GMM and use spline results directly
-                x_values = y_pred_smooth
-                pdf_values = pdf_smooth
-            else:
-                try:
-                    # Use a gaussian mixture model
-                    gmm = GaussianMixture(n_components=3, max_iter=1000)
-                    gmm.fit(y_pred_smooth.reshape(-1, 1))
-                    
-                    # Check if GMM converged
-                    if not gmm.converged_:
-                        print(f"Warning: GMM did not converge after {gmm.n_iter_} iterations, using spline result")
-                        x_values = y_pred_smooth
-                        pdf_values = pdf_smooth
-                    else:
-                        # Generate final smoothed PDF on a regular grid
-                        x_values = np.linspace(np.min(y_pred_smooth), np.max(y_pred_smooth), num_points)
-                        pdf_values = np.exp(gmm.score_samples(x_values.reshape(-1, 1)))
-                        
-                        # Much more aggressive checks for problematic GMM outputs
-                        use_gmm = True
-                        
-                        # 1. Check for any invalid values
-                        if np.any(np.isnan(pdf_values)) or np.any(np.isinf(pdf_values)) or np.all(pdf_values < 1e-10):
-                            print(f"Warning: GMM produced invalid values, using spline result")
-                            use_gmm = False
-                            
-                        # 2. Check for extremely peaked distributions (very common failure mode)
-                        if use_gmm:
-                            pdf_max = np.max(pdf_values)
-                            pdf_mean = np.mean(pdf_values)
-                            if pdf_max > 100 * pdf_mean:  # Less extreme threshold to be more cautious
-                                print(f"Warning: GMM produced extremely peaked distribution (max/mean ratio: {pdf_max/pdf_mean:.1f}), using spline result")
-                                use_gmm = False
-                        
-                        # 3. Check for too narrow effective support (another common failure)
-                        if use_gmm:
-                            # Count points with significant probability mass
-                            significant_points = np.sum(pdf_values > pdf_max * 0.01)
-                            if significant_points < num_points * 0.01:  # Less than 1% of points have significant probability
-                                print(f"Warning: GMM output has too narrow effective support ({significant_points}/{num_points} significant points), using spline result")
-                                use_gmm = False
-                        
-                        # 4. Generate a test CDF and check its properties
-                        if use_gmm:
-                            # Normalize PDF first
-                            integral = np.trapz(pdf_values, x_values)
-                            if integral <= 1e-10:
-                                print(f"Warning: GMM produced too small integral ({integral}), using spline result")
-                                use_gmm = False
-                            else:
-                                # Normalize and compute test CDF
-                                pdf_values /= integral
-                                test_cdf = cumulative_trapezoid(pdf_values, x_values, initial=0)
-                                
-                                # Check that CDF is usable for confidence intervals
-                                if test_cdf[-1] <= 0.9:  # CDF should end close to 1
-                                    print(f"Warning: GMM produced CDF that doesn't reach 1 (max: {test_cdf[-1]:.3f}), using spline result")
-                                    use_gmm = False
-                                    
-                                # Check if CDF has enough distinct steps for quantile calculation
-                                elif np.count_nonzero(np.diff(test_cdf) > 1e-6) < 20:
-                                    print(f"Warning: GMM produced CDF with too few increasing steps, using spline result")
-                                    use_gmm = False
-                                    
-                                # Check if the CDF can extract reasonable quantiles
-                                elif any(np.isclose(np.searchsorted(test_cdf, q) / len(test_cdf), 0) or 
-                                         np.isclose(np.searchsorted(test_cdf, q) / len(test_cdf), 1) 
-                                         for q in [0.025, 0.25, 0.5, 0.75, 0.975]):
-                                    print(f"Warning: GMM produced CDF that would give extreme quantiles, using spline result")
-                                    use_gmm = False
-                        
-                        # Finally, use spline results if any test failed
-                        if not use_gmm:
-                            x_values = y_pred_smooth
-                            pdf_values = pdf_smooth
-                        
-                except Exception as e:
-                    # If GMM fails, fall back to the spline result
-                    print(f"Warning: GMM failed, using spline result: {e}")
-                    x_values = y_pred_smooth
-                    pdf_values = pdf_smooth
-            
-            # Compute CDF using cumulative_trapezoid for accurate integration
-            cdf_values = cumulative_trapezoid(pdf_values, x_values, initial=0)
-            
-            # Normalize CDF to ensure it ends at 1.0
-            if cdf_values[-1] > 0:
-                cdf_values /= cdf_values[-1]
-            else:
-                print(f"Warning: CDF ends at zero, falling back to uniform CDF")
-                cdf_values = np.linspace(0, 1, len(x_values))
-                
-            # Ensure CDF is strictly increasing (important for accurate quantile lookup)
-            # Find places where CDF doesn't increase
-            not_increasing = np.where(np.diff(cdf_values) <= 0)[0]
-            if len(not_increasing) > 0:
-                # Apply a small correction where needed
-                epsilon = 1e-10
-                for idx in not_increasing:
-                    cdf_values[idx+1] = cdf_values[idx] + epsilon
-                
-                # Re-normalize to ensure CDF ends at 1.0
-                cdf_values /= cdf_values[-1]
-                
-            return x_values, pdf_values, cdf_values, quantiles_smooth
-        
-        else:
-            raise ValueError(f"Unknown method: {method}. Choose from 'spline', 'gmm', or 'sample_kde'.")
 
-    def _get_uncalibrated_predictions(self, X):
+    def evaluate_calibration(self, X_val, y_val, confidence_levels=None):
         """
-        Get raw, uncalibrated quantile predictions directly from the model.
+        Evaluate the calibration quality of the model on validation data.
         
         Parameters:
         -----------
-        X : pandas.DataFrame or numpy.ndarray
-            Features to predict on.
+        X_val : pandas.DataFrame or numpy.ndarray
+            Validation features.
+        y_val : numpy.ndarray
+            Validation target values.
+        confidence_levels : list, optional
+            List of confidence levels to evaluate. If None, uses [0.5, 0.8, 0.9, 0.95, 0.99].
             
         Returns:
         --------
-        numpy.ndarray: Raw uncalibrated quantile predictions with shape (n_samples, n_quantiles)
+        pandas.DataFrame
+            DataFrame containing desired vs. actual coverage for each confidence level.
         """
-        if self.train_separate_models:
-            # Convert X to DataFrame if it's not already
-            if not isinstance(X, pd.DataFrame):
-                if len(X.shape) == 1:
-                    X = pd.DataFrame([X])
-                else:
-                    X = pd.DataFrame(X)
-            
-            # Get predictions for each quantile
-            quantile_preds = []
-            # Add tqdm progress bar
-            for i in tqdm(range(len(X)), desc="Getting uncalibrated predictions"):
-                sample_preds = []
-                # Create a single-row DataFrame for this sample to preserve categorical features
-                sample_df = X.iloc[[i]]
-                
-                for q in self.quantiles:
-                    # Predict using the DataFrame directly instead of reshaping to numpy array
-                    sample_preds.append(self.trained_models[q].predict(sample_df)[0])
-                quantile_preds.append(sample_preds)
-            quantile_preds = np.array(quantile_preds)
-        else:
-            # Get quantile predictions from the single model
-            raw_preds = self.model.predict(X)
-            
-            # For a single sample, reshape to 2D
-            if len(raw_preds.shape) == 1:
-                raw_preds = raw_preds.reshape(1, -1)
-            
-            # By default, assume the predictions are already aligned with our quantiles
-            quantile_preds = raw_preds
-            
-            # Check if we need to reorder predictions based on saved quantile mapping
-            if hasattr(self, 'model_quantiles') and self.model_quantiles is not None:
-                # If we have saved model quantiles that differ from our quantiles, reorder
-                if len(self.model_quantiles) == raw_preds.shape[1] and not np.array_equal(self.model_quantiles, self.quantiles):
-                    # Create a new array for reordered predictions
-                    reordered_preds = np.zeros((raw_preds.shape[0], len(self.quantiles)))
-                    
-                    # For each quantile in self.quantiles, find the matching quantile in model_quantiles
-                    for i, q in enumerate(self.quantiles):
-                        # Find exact matching quantile or closest if not exact
-                        # Use approximate equality with tolerance for floating point precision
-                        tolerance = 1e-8
-                        matches = np.where(np.abs(self.model_quantiles - q) < tolerance)[0]
-                        if len(matches) > 0:
-                            # Approximate match found
-                            idx = matches[0]
-                        else:
-                            # Find closest match
-                            closest_q = self.model_quantiles[np.argmin(np.abs(self.model_quantiles - q))]
-                            idx = np.argmin(np.abs(self.model_quantiles - q))
-                        
-                        reordered_preds[:, i] = raw_preds[:, idx]
-                    
-                    quantile_preds = reordered_preds
-            # Our earlier logic for when we don't have a saved mapping but quantiles mismatch
-            elif raw_preds.shape[1] != len(self.quantiles):
-                # Try to extract the correct ordering from the model
-                model_quantiles = None
-                try:
-                    loss_function = self.model.get_param('loss_function')
-                    if loss_function and 'MultiQuantile:alpha=' in loss_function:
-                        quantiles_str = loss_function.split('MultiQuantile:alpha=')[1]
-                        model_quantiles = np.array([float(q.strip()) for q in quantiles_str.split(',')])
-                except:
-                    pass
-                
-                # If we have model_quantiles and self.quantiles, we need to reorder the predictions
-                if model_quantiles is not None and len(model_quantiles) == raw_preds.shape[1]:
-                    # Create a mapping from model_quantiles to indices
-                    model_indices = {q: i for i, q in enumerate(model_quantiles)}
-                    
-                    # Create a new array for reordered predictions
-                    reordered_preds = np.zeros((raw_preds.shape[0], len(self.quantiles)))
-                    
-                    # For each quantile in self.quantiles, find the closest in model_quantiles
-                    for i, q in enumerate(self.quantiles):
-                        # Find closest quantile in model_quantiles
-                        closest_q = model_quantiles[np.argmin(np.abs(model_quantiles - q))]
-                        closest_idx = model_indices[closest_q]
-                        reordered_preds[:, i] = raw_preds[:, closest_idx]
-                    
-                    quantile_preds = reordered_preds
-                else:
-                    # If we can't reorder properly, use raw predictions
-                    quantile_preds = raw_preds
-            
+        if confidence_levels is None:
+            confidence_levels = [0.5, 0.8, 0.9, 0.95, 0.99]
+        
+        # Get predictions for all quantiles
+        quantile_preds = self.predict_raw(X_val)
+        
         # For a single sample
         if len(quantile_preds.shape) == 1:
             quantile_preds = quantile_preds.reshape(1, -1)
-            
-        return quantile_preds
         
+        # Calculate coverage for each confidence level
+        coverage_results = []
+        for conf_level in confidence_levels:
+            # Calculate the lower and upper quantiles for this confidence level
+            lower_q = (1 - conf_level) / 2
+            upper_q = 1 - lower_q
+            
+            # Find indices for the closest quantiles
+            lower_idx = np.argmin(np.abs(self.quantiles - lower_q))
+            upper_idx = np.argmin(np.abs(self.quantiles - upper_q))
+            
+            # Extract predictions for these quantiles
+            lower_bounds = quantile_preds[:, lower_idx]
+            upper_bounds = quantile_preds[:, upper_idx]
+            
+            # Calculate coverage (percentage of true values within the bounds)
+            coverage = np.mean((y_val >= lower_bounds) & (y_val <= upper_bounds))
+            
+            # Calculate average interval width
+            avg_width = np.mean(upper_bounds - lower_bounds)
+            
+            coverage_results.append({
+                'confidence_level': conf_level,
+                'desired_coverage': conf_level,
+                'actual_coverage': coverage,
+                'average_width': avg_width,
+                'coverage_error': coverage - conf_level,
+                'lower_quantile': self.quantiles[lower_idx],
+                'upper_quantile': self.quantiles[upper_idx]
+            })
+        
+        # Return results as DataFrame
+        return pd.DataFrame(coverage_results)
+
     def save(self, filepath, format='cbm', compression_level=6):
         """
         Save the trained ProbGBT model to a file.
@@ -1022,65 +656,426 @@ class ProbGBT:
         
         return self 
 
-    def evaluate_calibration(self, X_val, y_val, confidence_levels=None):
+    def _generate_non_uniform_quantiles(self):
         """
-        Evaluate the calibration quality of the model on validation data.
+        Generate non-uniformly spaced quantiles with more focus on the tails.
+        
+        Returns:
+        --------
+        numpy.ndarray
+            Array of quantile values between 0 and 1.
+        """
+        # Uniformly spaced quantiles
+        uniform_quantiles = np.linspace(0.01, 0.99, self.num_quantiles)
+        
+        # Transform using normal distribution's PPF and CDF to focus more on the tails
+        non_uniform_quantiles = norm.cdf(norm.ppf(uniform_quantiles) * 1.5)
+        
+        # Ensure values are within [0,1]
+        non_uniform_quantiles = np.clip(non_uniform_quantiles, 0, 1)
+        
+        return non_uniform_quantiles
+
+    def _get_uncalibrated_predictions(self, X):
+        """
+        Get raw, uncalibrated quantile predictions directly from the model.
         
         Parameters:
         -----------
-        X_val : pandas.DataFrame or numpy.ndarray
-            Validation features.
-        y_val : numpy.ndarray
-            Validation target values.
-        confidence_levels : list, optional
-            List of confidence levels to evaluate. If None, uses [0.5, 0.8, 0.9, 0.95, 0.99].
+        X : pandas.DataFrame or numpy.ndarray
+            Features to predict on.
             
         Returns:
         --------
-        pandas.DataFrame
-            DataFrame containing desired vs. actual coverage for each confidence level.
+        numpy.ndarray: Raw uncalibrated quantile predictions with shape (n_samples, n_quantiles)
         """
-        if confidence_levels is None:
-            confidence_levels = [0.5, 0.8, 0.9, 0.95, 0.99]
+        if self.train_separate_models:
+            # Convert X to DataFrame if it's not already
+            if not isinstance(X, pd.DataFrame):
+                if len(X.shape) == 1:
+                    X = pd.DataFrame([X])
+                else:
+                    X = pd.DataFrame(X)
+            
+            # Get predictions for each quantile
+            quantile_preds = []
+            # Add tqdm progress bar
+            for i in tqdm(range(len(X)), desc="Getting uncalibrated predictions"):
+                sample_preds = []
+                # Create a single-row DataFrame for this sample to preserve categorical features
+                sample_df = X.iloc[[i]]
+                
+                for q in self.quantiles:
+                    # Predict using the DataFrame directly instead of reshaping to numpy array
+                    sample_preds.append(self.trained_models[q].predict(sample_df)[0])
+                quantile_preds.append(sample_preds)
+            quantile_preds = np.array(quantile_preds)
+        else:
+            # Get quantile predictions from the single model
+            raw_preds = self.model.predict(X)
+            
+            # For a single sample, reshape to 2D
+            if len(raw_preds.shape) == 1:
+                raw_preds = raw_preds.reshape(1, -1)
+            
+            # By default, assume the predictions are already aligned with our quantiles
+            quantile_preds = raw_preds
+            
+            # TODO: this part may not be needed if we use fixed seed
+            # Check if we need to reorder predictions based on saved quantile mapping
+            if hasattr(self, 'model_quantiles') and self.model_quantiles is not None:
+                # If we have saved model quantiles that differ from our quantiles, reorder
+                if len(self.model_quantiles) == raw_preds.shape[1] and not np.array_equal(self.model_quantiles, self.quantiles):
+                    # Create a new array for reordered predictions
+                    reordered_preds = np.zeros((raw_preds.shape[0], len(self.quantiles)))
+                    
+                    # For each quantile in self.quantiles, find the matching quantile in model_quantiles
+                    for i, q in enumerate(self.quantiles):
+                        # Find exact matching quantile or closest if not exact
+                        # Use approximate equality with tolerance for floating point precision
+                        tolerance = 1e-8
+                        matches = np.where(np.abs(self.model_quantiles - q) < tolerance)[0]
+                        if len(matches) > 0:
+                            # Approximate match found
+                            idx = matches[0]
+                        else:
+                            # Find closest match
+                            closest_q = self.model_quantiles[np.argmin(np.abs(self.model_quantiles - q))]
+                            idx = np.argmin(np.abs(self.model_quantiles - q))
+                        
+                        reordered_preds[:, i] = raw_preds[:, idx]
+                    
+                    quantile_preds = reordered_preds
+            # Our earlier logic for when we don't have a saved mapping but quantiles mismatch
+            elif raw_preds.shape[1] != len(self.quantiles):
+                # Try to extract the correct ordering from the model
+                model_quantiles = None
+                try:
+                    loss_function = self.model.get_param('loss_function')
+                    if loss_function and 'MultiQuantile:alpha=' in loss_function:
+                        quantiles_str = loss_function.split('MultiQuantile:alpha=')[1]
+                        model_quantiles = np.array([float(q.strip()) for q in quantiles_str.split(',')])
+                except:
+                    pass
+                
+                # If we have model_quantiles and self.quantiles, we need to reorder the predictions
+                if model_quantiles is not None and len(model_quantiles) == raw_preds.shape[1]:
+                    # Create a mapping from model_quantiles to indices
+                    model_indices = {q: i for i, q in enumerate(model_quantiles)}
+                    
+                    # Create a new array for reordered predictions
+                    reordered_preds = np.zeros((raw_preds.shape[0], len(self.quantiles)))
+                    
+                    # For each quantile in self.quantiles, find the closest in model_quantiles
+                    for i, q in enumerate(self.quantiles):
+                        # Find closest quantile in model_quantiles
+                        closest_q = model_quantiles[np.argmin(np.abs(model_quantiles - q))]
+                        closest_idx = model_indices[closest_q]
+                        reordered_preds[:, i] = raw_preds[:, closest_idx]
+                    
+                    quantile_preds = reordered_preds
+                else:
+                    # If we can't reorder properly, use raw predictions
+                    quantile_preds = raw_preds
+            
+        # For a single sample
+        if len(quantile_preds.shape) == 1:
+            quantile_preds = quantile_preds.reshape(1, -1)
+            
+        return quantile_preds
+    
+    def _calibrate(self, X_cal, y_cal, verbose=True):
+        """
+        Calibrate the model using conformal prediction.
         
-        # Get predictions for all quantiles
-        quantile_preds = self.predict_raw(X_val)
+        Parameters:
+        -----------
+        X_cal : pandas.DataFrame or numpy.ndarray
+            Calibration features.
+        y_cal : numpy.ndarray
+            Calibration target values.
+        verbose : bool, default=True
+            If True, print calibration progress.
+        
+        Returns:
+        --------
+        None
+        """
+        if verbose:
+            print("Calibrating model using conformal prediction...")
+        
+        # Get uncalibrated quantile predictions on calibration set
+        quantile_preds = self._get_uncalibrated_predictions(X_cal)
         
         # For a single sample
         if len(quantile_preds.shape) == 1:
             quantile_preds = quantile_preds.reshape(1, -1)
         
-        # Calculate coverage for each confidence level
-        coverage_results = []
-        for conf_level in confidence_levels:
-            # Calculate the lower and upper quantiles for this confidence level
-            lower_q = (1 - conf_level) / 2
-            upper_q = 1 - lower_q
-            
-            # Find indices for the closest quantiles
-            lower_idx = np.argmin(np.abs(self.quantiles - lower_q))
-            upper_idx = np.argmin(np.abs(self.quantiles - upper_q))
-            
-            # Extract predictions for these quantiles
-            lower_bounds = quantile_preds[:, lower_idx]
-            upper_bounds = quantile_preds[:, upper_idx]
-            
-            # Calculate coverage (percentage of true values within the bounds)
-            coverage = np.mean((y_val >= lower_bounds) & (y_val <= upper_bounds))
-            
-            # Calculate average interval width
-            avg_width = np.mean(upper_bounds - lower_bounds)
-            
-            coverage_results.append({
-                'confidence_level': conf_level,
-                'desired_coverage': conf_level,
-                'actual_coverage': coverage,
-                'average_width': avg_width,
-                'coverage_error': coverage - conf_level,
-                'lower_quantile': self.quantiles[lower_idx],
-                'upper_quantile': self.quantiles[upper_idx]
-            })
+        # Store calibration information
+        self.conformity_scores = {}
         
-        # Return results as DataFrame
-        return pd.DataFrame(coverage_results) 
-
+        # For each quantile, compute nonconformity scores
+        for q_idx, q in enumerate(self.quantiles):
+            # Extract predictions for this quantile
+            q_preds = quantile_preds[:, q_idx]
+            
+            # For lower tail: E_i = y_i - q̂_α(X_i)
+            # We want to adjust the quantile to ensure P(Y ≤ q̂_α(X)) = α
+            conformity_scores = y_cal - q_preds
+            
+            # Store the scores for this quantile
+            self.conformity_scores[q] = conformity_scores
+        
+        # Verify basic properties if verbose is enabled
+        if verbose:
+            for q in [0.1, 0.5, 0.9]:
+                if q in self.quantiles:
+                    q_idx = np.where(self.quantiles == q)[0][0]
+                    # Get predictions for this quantile
+                    q_preds = quantile_preds[:, q_idx]
+                    # Calculate empirical coverage (proportion of y values below prediction)
+                    empirical_coverage = np.mean(y_cal <= q_preds)
+                    print(f"Quantile {q}: Desired coverage = {q*100:.1f}%, Raw empirical coverage = {empirical_coverage*100:.1f}%")
+        
+        self.is_calibrated = True
+        if verbose:
+            print("Calibration completed successfully.")
+    
+    def _get_smoothed_pdf(self, quantile_preds, i, num_points=1000, method='sample_kde'):
+        """
+        Helper method to compute smoothed PDF for a single sample.
+        
+        Parameters:
+        -----------
+        quantile_preds : numpy.ndarray
+            Quantile predictions from predict()
+        i : int
+            Index of the sample in quantile_preds to process.
+        num_points : int, default=1000
+            Number of points to use for the PDF.
+        method : str, default='sample_kde'
+            Method to use for PDF smoothing:
+            - 'spline': Original method using GAM smoothing only
+            - 'gmm': Kernel Density Estimation applied on top of spline smoothing
+            - 'sample_kde': Sample from empirical CDF and apply KDE smoothing (default)
+            
+        Returns:
+        --------
+        tuple: (x_values, pdf_values, cdf_values, quantiles_smooth)
+            - x_values: x-axis values for the PDF (output range)
+            - pdf_values: probability density function values
+            - cdf_values: cumulative distribution function values 
+            - quantiles_smooth: quantile values (0-1 range)
+        """
+        # Get the predicted quantiles for this sample
+        y_pred_sample = quantile_preds[i]
+        
+        if method == 'sample_kde':
+            # Determine the range directly from the quantile predictions
+            y_min, y_max = np.min(y_pred_sample), np.max(y_pred_sample)
+            y_range = y_max - y_min
+            
+            # Add padding to the range to avoid edge effects
+            y_min -= 0.2 * y_range
+            y_max += 0.2 * y_range
+            
+            # Generate random uniform samples for probability values
+            # Use a fixed seed based on the sample index to ensure reproducibility and consistency
+            fixed_seed = 42 + i if self.random_seed is None else self.random_seed + i
+            # Create a local random generator instead of affecting global state
+            rng = np.random.RandomState(fixed_seed)
+            n_samples = num_points  # Number of samples to draw (same as num_points)
+            # Use the local random generator
+            prob_samples = rng.uniform(0, 1, n_samples)
+            
+            # Interpolate to get samples from the empirical CDF
+            samples = np.interp(prob_samples, self.quantiles, y_pred_sample)
+            
+            # Reshape samples for KDE
+            samples = samples.reshape(-1, 1)
+            
+            # Fit KDE and get smoothed PDF
+            kde = KernelDensity(bandwidth='silverman', kernel='gaussian')
+            kde.fit(samples)
+            
+            # Generate points for PDF evaluation
+            x_values = np.linspace(y_min, y_max, num_points).reshape(-1, 1)
+            log_pdf = kde.score_samples(x_values)
+            pdf_values = np.exp(log_pdf)
+            
+            # Normalize PDF
+            pdf_values = pdf_values / np.trapz(pdf_values, x_values.ravel())
+            
+            # Compute CDF using numerical integration
+            cdf_values = cumulative_trapezoid(pdf_values, x_values.ravel(), initial=0)
+            
+            # Ensure CDF ends at 1.0
+            cdf_values /= cdf_values[-1]
+            
+            # Create quantiles_smooth for API consistency
+            quantiles_smooth = np.linspace(0, 1, num_points)
+            
+            return x_values.ravel(), pdf_values, cdf_values, quantiles_smooth
+        
+        if method == 'spline':
+            # Original method using GAM smoothing
+            # Fit a GAM to smooth the quantile function
+            gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
+            
+            # Generate smoothed CDF
+            quantiles_smooth = np.linspace(0, 1, num_points)
+            y_pred_smooth = gam.predict(quantiles_smooth)
+            
+            # Compute PDF (derivative of the quantile function)
+            epsilon = 1e-10  # Small value to avoid division by zero
+            pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
+            
+            # Simple method to ensure non-negativity
+            pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
+            
+            # Normalize the PDF
+            integral = np.trapz(pdf_smooth, y_pred_smooth)
+            if integral > 1e-10:  # Only normalize if integral is not too close to zero
+                pdf_smooth /= integral
+            else:
+                # If integral is too small, use a uniform distribution instead
+                pdf_smooth = np.ones_like(pdf_smooth) / len(pdf_smooth)
+            
+            # Return the quantiles_smooth as the cdf_values for consistency
+            return y_pred_smooth, pdf_smooth, quantiles_smooth, quantiles_smooth
+            
+        elif method == 'gmm':
+            # First get spline results as a base
+            # Fit a GAM to smooth the quantile function
+            gam = LinearGAM(s(0, constraints="monotonic_inc")).fit(self.quantiles, y_pred_sample)
+            
+            # Generate smoothed CDF
+            quantiles_smooth = np.linspace(0, 1, num_points)
+            y_pred_smooth = gam.predict(quantiles_smooth)
+            
+            # Compute PDF (derivative of the quantile function)
+            epsilon = 1e-10  # Small value to avoid division by zero
+            pdf_smooth = np.gradient(quantiles_smooth, y_pred_smooth + epsilon)
+            
+            # Simple method to ensure non-negativity
+            pdf_smooth = np.maximum(pdf_smooth, 0)  # Ensure non-negative
+            
+            # Normalize the PDF
+            integral = np.trapz(pdf_smooth, y_pred_smooth)
+            if integral > 1e-10:
+                pdf_smooth /= integral
+            else:
+                pdf_smooth = np.ones_like(pdf_smooth) / len(pdf_smooth)
+            
+            # Now apply GMM on top of spline results
+            # Check for NaN or Inf values before proceeding with GMM
+            if np.any(np.isnan(pdf_smooth)) or np.any(np.isinf(pdf_smooth)) or np.any(np.isnan(y_pred_smooth)) or np.any(np.isinf(y_pred_smooth)):
+                # If there are NaNs or Infs, skip GMM and use spline results directly
+                x_values = y_pred_smooth
+                pdf_values = pdf_smooth
+            else:
+                try:
+                    # Use a gaussian mixture model
+                    gmm = GaussianMixture(n_components=3, max_iter=1000)
+                    gmm.fit(y_pred_smooth.reshape(-1, 1))
+                    
+                    # Check if GMM converged
+                    if not gmm.converged_:
+                        print(f"Warning: GMM did not converge after {gmm.n_iter_} iterations, using spline result")
+                        x_values = y_pred_smooth
+                        pdf_values = pdf_smooth
+                    else:
+                        # Generate final smoothed PDF on a regular grid
+                        x_values = np.linspace(np.min(y_pred_smooth), np.max(y_pred_smooth), num_points)
+                        pdf_values = np.exp(gmm.score_samples(x_values.reshape(-1, 1)))
+                        
+                        # Much more aggressive checks for problematic GMM outputs
+                        use_gmm = True
+                        
+                        # 1. Check for any invalid values
+                        if np.any(np.isnan(pdf_values)) or np.any(np.isinf(pdf_values)) or np.all(pdf_values < 1e-10):
+                            print(f"Warning: GMM produced invalid values, using spline result")
+                            use_gmm = False
+                            
+                        # 2. Check for extremely peaked distributions (very common failure mode)
+                        if use_gmm:
+                            pdf_max = np.max(pdf_values)
+                            pdf_mean = np.mean(pdf_values)
+                            if pdf_max > 100 * pdf_mean:  # Less extreme threshold to be more cautious
+                                print(f"Warning: GMM produced extremely peaked distribution (max/mean ratio: {pdf_max/pdf_mean:.1f}), using spline result")
+                                use_gmm = False
+                        
+                        # 3. Check for too narrow effective support (another common failure)
+                        if use_gmm:
+                            # Count points with significant probability mass
+                            significant_points = np.sum(pdf_values > pdf_max * 0.01)
+                            if significant_points < num_points * 0.01:  # Less than 1% of points have significant probability
+                                print(f"Warning: GMM output has too narrow effective support ({significant_points}/{num_points} significant points), using spline result")
+                                use_gmm = False
+                        
+                        # 4. Generate a test CDF and check its properties
+                        if use_gmm:
+                            # Normalize PDF first
+                            integral = np.trapz(pdf_values, x_values)
+                            if integral <= 1e-10:
+                                print(f"Warning: GMM produced too small integral ({integral}), using spline result")
+                                use_gmm = False
+                            else:
+                                # Normalize and compute test CDF
+                                pdf_values /= integral
+                                test_cdf = cumulative_trapezoid(pdf_values, x_values, initial=0)
+                                
+                                # Check that CDF is usable for confidence intervals
+                                if test_cdf[-1] <= 0.9:  # CDF should end close to 1
+                                    print(f"Warning: GMM produced CDF that doesn't reach 1 (max: {test_cdf[-1]:.3f}), using spline result")
+                                    use_gmm = False
+                                    
+                                # Check if CDF has enough distinct steps for quantile calculation
+                                elif np.count_nonzero(np.diff(test_cdf) > 1e-6) < 20:
+                                    print(f"Warning: GMM produced CDF with too few increasing steps, using spline result")
+                                    use_gmm = False
+                                    
+                                # Check if the CDF can extract reasonable quantiles
+                                elif any(np.isclose(np.searchsorted(test_cdf, q) / len(test_cdf), 0) or 
+                                         np.isclose(np.searchsorted(test_cdf, q) / len(test_cdf), 1) 
+                                         for q in [0.025, 0.25, 0.5, 0.75, 0.975]):
+                                    print(f"Warning: GMM produced CDF that would give extreme quantiles, using spline result")
+                                    use_gmm = False
+                        
+                        # Finally, use spline results if any test failed
+                        if not use_gmm:
+                            x_values = y_pred_smooth
+                            pdf_values = pdf_smooth
+                        
+                except Exception as e:
+                    # If GMM fails, fall back to the spline result
+                    print(f"Warning: GMM failed, using spline result: {e}")
+                    x_values = y_pred_smooth
+                    pdf_values = pdf_smooth
+            
+            # Compute CDF using cumulative_trapezoid for accurate integration
+            cdf_values = cumulative_trapezoid(pdf_values, x_values, initial=0)
+            
+            # Normalize CDF to ensure it ends at 1.0
+            if cdf_values[-1] > 0:
+                cdf_values /= cdf_values[-1]
+            else:
+                print(f"Warning: CDF ends at zero, falling back to uniform CDF")
+                cdf_values = np.linspace(0, 1, len(x_values))
+                
+            # Ensure CDF is strictly increasing (important for accurate quantile lookup)
+            # Find places where CDF doesn't increase
+            not_increasing = np.where(np.diff(cdf_values) <= 0)[0]
+            if len(not_increasing) > 0:
+                # Apply a small correction where needed
+                epsilon = 1e-10
+                for idx in not_increasing:
+                    cdf_values[idx+1] = cdf_values[idx] + epsilon
+                
+                # Re-normalize to ensure CDF ends at 1.0
+                cdf_values /= cdf_values[-1]
+                
+            return x_values, pdf_values, cdf_values, quantiles_smooth
+        
+        else:
+            raise ValueError(f"Unknown method: {method}. Choose from 'spline', 'gmm', or 'sample_kde'.")
